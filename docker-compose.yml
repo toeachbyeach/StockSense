@@ -18,3 +18,5 @@ services:
       - PASSWORD=changeme123
       # Add this line if you ever want to force Puppeteer into non-headless for debugging
       # - DISPLAY=:99
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
