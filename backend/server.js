@@ -1414,6 +1414,19 @@ app.delete('/api/items/:id', authenticateToken, (req, res) => {
   });
 });
 
+// API: Delete a specific store source from an item group
+app.delete('/api/items/sources/:sourceId', authenticateToken, (req, res) => {
+  const { sourceId } = req.params;
+  log(`Deleting source ${sourceId} from database`);
+  db.run('DELETE FROM price_history WHERE item_id = ?', [sourceId], (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    db.run('DELETE FROM items WHERE id = ?', [sourceId], function(delErr) {
+      if (delErr) return res.status(500).json({ error: delErr.message });
+      res.json({ success: true });
+    });
+  });
+});
+
 // API: Get all items (groups)
 app.get('/api/items', authenticateToken, (req, res) => {
   // Support optional sorting and tag filtering via query params:

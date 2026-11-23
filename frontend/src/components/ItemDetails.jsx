@@ -23,6 +23,7 @@ export default function ItemDetails({ itemId, onBack }) {
   const [resetState, setResetState] = useState('idle'); // idle | confirm | running | done | error
   const [cleanState, setCleanState] = useState('idle'); // idle | running | done | error
   const [cleanResult, setCleanResult] = useState(null); // { removed, remaining }
+  const [deleteState, setDeleteState] = useState('idle'); // idle | confirm | running | done | error
   
   // Single point deletion popup state
   const [selectedPoint, setSelectedPoint] = useState(null);
@@ -300,6 +301,26 @@ export default function ItemDetails({ itemId, onBack }) {
         setTimeout(() => onBack(), 1200);
       } catch (e) {
         setResetState('error');
+      }
+    }
+  };
+
+  // Delete Item: permanently remove the item group and its price history
+  const handleDeleteItem = async () => {
+    if (deleteState === 'running') return;
+    if (deleteState === 'idle') {
+      setDeleteState('confirm');
+      return;
+    }
+    if (deleteState === 'confirm' || deleteState === 'error') {
+      setDeleteState('running');
+      try {
+        await axios.delete(`/api/items/${itemId}`);
+        setDeleteState('done');
+        setTimeout(() => onBack(), 800);
+      } catch (e) {
+        console.error('Failed to delete item', e);
+        setDeleteState('error');
       }
     }
   };
@@ -765,6 +786,43 @@ export default function ItemDetails({ itemId, onBack }) {
           {resetState === 'done' && (<><CheckCircle2 size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />Done ✓</>)}
           {resetState === 'error' && (<><XCircle size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />Failed — retry</>)}
         </button>
+        <button
+          onClick={handleDeleteItem}
+          disabled={deleteState === 'running'}
+          className="tab-btn"
+          style={{
+            marginLeft: 8,
+            background: deleteState === 'confirm' ? 'rgba(239, 68, 68, 0.45)' : 'rgba(239, 68, 68, 0.15)',
+            border: '1px solid rgba(239, 68, 68, 0.6)',
+            color: '#ef4444',
+            fontWeight: deleteState === 'confirm' ? 700 : 500,
+            cursor: deleteState === 'running' ? 'not-allowed' : 'pointer',
+            opacity: deleteState === 'running' ? 0.8 : 1,
+            whiteSpace: 'nowrap'
+          }}
+          title="Permanently delete this tracked item and all its price history"
+        >
+          {deleteState === 'idle' && (<><Trash2 size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />Delete Item</>)}
+          {deleteState === 'confirm' && (<><AlertTriangle size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />Confirm delete?</>)}
+          {deleteState === 'running' && (<><RefreshCcw size={16} className="spin" style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />Deleting…</>)}
+          {deleteState === 'done' && (<><CheckCircle2 size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />Deleted ✓</>)}
+          {deleteState === 'error' && (<><XCircle size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />Failed — retry</>)}
+        </button>
+        {deleteState === 'confirm' && (
+          <button
+            onClick={() => setDeleteState('idle')}
+            className="tab-btn"
+            style={{
+              marginLeft: 6,
+              padding: '6px 10px',
+              border: '1px solid var(--border)',
+              fontSize: '0.82rem',
+              color: 'var(--text-muted)'
+            }}
+          >
+            Cancel
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 350px', gap: 24, alignItems: 'start' }}>
@@ -1715,24 +1773,44 @@ export default function ItemDetails({ itemId, onBack }) {
                           </a>
                         )}
                       </div>
-                      <button 
-                        onClick={() => {
-                          if (isEditing) {
-                            setEditingSourceId(null);
-                          } else {
-                            setEditingSourceId(source.id);
-                            setEditSourcePackQty(source.packQuantity || 1);
-                            setEditSourceVolQty(source.volumeQuantity || 1);
-                            setEditSourceVolUnit(source.volumeUnit || '');
-                            setEditSourceUnitPricingEnabled(source.unitPricingEnabled === true || source.unitPricingEnabled === 1);
-                            setEditSourceTrackCondition(source.trackCondition || 'any');
-                            setEditSourceTrackSubscribe(source.trackSubscribe || 'any');
-                          }
-                        }}
-                        style={{ background: 'none', border: '1px solid var(--border)', color: 'white', borderRadius: 4, padding: '2px 8px', fontSize: '0.8rem', cursor: 'pointer' }}
-                      >
-                        {isEditing ? 'Cancel' : 'Edit Source'}
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button 
+                          onClick={() => {
+                            if (isEditing) {
+                              setEditingSourceId(null);
+                            } else {
+                              setEditingSourceId(source.id);
+                              setEditSourcePackQty(source.packQuantity || 1);
+                              setEditSourceVolQty(source.volumeQuantity || 1);
+                              setEditSourceVolUnit(source.volumeUnit || '');
+                              setEditSourceUnitPricingEnabled(source.unitPricingEnabled === true || source.unitPricingEnabled === 1);
+                              setEditSourceTrackCondition(source.trackCondition || 'any');
+                              setEditSourceTrackSubscribe(source.trackSubscribe || 'any');
+                            }
+                          }}
+                          style={{ background: 'none', border: '1px solid var(--border)', color: 'white', borderRadius: 4, padding: '2px 8px', fontSize: '0.8rem', cursor: 'pointer' }}
+                        >
+                          {isEditing ? 'Cancel' : 'Edit Source'}
+                        </button>
+                        {item.sources?.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!window.confirm(`Delete ${retailer.name} source from this item?`)) return;
+                              try {
+                                await axios.delete(`/api/items/sources/${source.id}`);
+                                fetchData();
+                              } catch (err) {
+                                alert('Failed to delete source: ' + (err.response?.data?.error || err.message));
+                              }
+                            }}
+                            style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: '#ef4444', borderRadius: 4, padding: '2px 8px', fontSize: '0.8rem', cursor: 'pointer' }}
+                            title="Remove this retailer from item"
+                          >
+                            <Trash2 size={13} style={{ display: 'inline', verticalAlign: 'text-bottom' }} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                     
                     {isEditing ? (
