@@ -17,6 +17,10 @@ const deriveName = (rawUrl) => {
       const parts = u.pathname.split('/').filter(Boolean);
       return cap(parts[parts.length - 1] || '') || 'Woolworths item';
     }
+    if (host.includes('aldi.com.au') && u.pathname.includes('/product/')) {
+      const slug = (u.pathname.split('/').pop() || '').replace(/-\d+$/, '');
+      return cap(slug) || 'ALDI item';
+    }
     if (host.includes('chemistwarehouse.com.au') && u.pathname.includes('/buy/')) {
       const parts = u.pathname.split('/').filter(Boolean);
       const slug = (parts[parts.length - 1] || '').replace(/^\d+-?/, '');

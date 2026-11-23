@@ -346,6 +346,7 @@ export default function ItemDetails({ itemId, onBack }) {
     if (!url) return { name: 'Source', color: 'var(--accent)' };
     if (url.includes('coles.com.au')) return { name: 'Coles', color: '#e01a22' };
     if (url.includes('woolworths.com.au')) return { name: 'Woolworths', color: '#178841' };
+    if (url.includes('aldi.com.au')) return { name: 'ALDI', color: '#002d72' };
     if (url.includes('amazon.')) return { name: 'Amazon', color: '#ff9900' };
     if (url.includes('chemistwarehouse.com.au')) return { name: 'Chemist Warehouse', color: '#0070ba' };
     if (url.includes('petcircle.com.au')) return { name: 'Pet Circle', color: '#ff5a00' };
@@ -1643,6 +1644,15 @@ export default function ItemDetails({ itemId, onBack }) {
                       >
                         Coles ↗
                       </a>
+                      <a 
+                        href={`https://www.aldi.com.au/results?q=${encodeURIComponent(rematchResults.groupName)}`} 
+                        target="_blank" 
+                        rel="noreferrer" 
+                        className="tab-btn" 
+                        style={{ textDecoration: 'none', fontSize: '0.8rem', padding: '4px 10px', background: '#002d72', color: '#fff' }}
+                      >
+                        ALDI ↗
+                      </a>
                     </div>
                     <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
                       Found a link? Copy and paste it in the "Paste new item URL here" box below to add it directly!
@@ -2103,7 +2113,7 @@ export default function ItemDetails({ itemId, onBack }) {
             <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <input 
                 type="url" 
-                placeholder="Paste new item URL here (Amazon, Pet Circle, Coles, Woolies, CW)..." 
+                placeholder="Paste new item URL here (Amazon, Pet Circle, Coles, Woolies, ALDI, CW)..." 
                 value={newSourceUrl}
                 onChange={e => setNewSourceUrl(e.target.value)}
                 style={{ flex: 1, padding: '8px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', borderRadius: 4, color: 'white', fontSize: '0.9rem' }}

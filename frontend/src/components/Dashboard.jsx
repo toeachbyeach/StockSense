@@ -8,6 +8,7 @@ const getWebsiteName = (url) => {
   if (!url) return 'Alternative';
   if (url.includes('coles.com.au')) return 'Coles';
   if (url.includes('woolworths.com.au')) return 'Woolworths';
+  if (url.includes('aldi.com.au')) return 'ALDI';
   if (url.includes('amazon.')) return 'Amazon';
   if (url.includes('chemistwarehouse.com.au')) return 'Chemist Warehouse';
   if (url.includes('petcircle.com.au')) return 'Pet Circle';
@@ -629,7 +630,7 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
         <form onSubmit={handleMatch} style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
           <input 
             type="url" 
-            placeholder="Paste link from Amazon, Bunnings, JB Hi-Fi, The Good Guys, Officeworks, Pet Circle, Coles, Woolies..." 
+            placeholder="Paste link from Amazon, Bunnings, JB Hi-Fi, The Good Guys, Officeworks, Pet Circle, Coles, Woolies, ALDI..." 
             value={newUrl}
             onChange={(e) => setNewUrl(e.target.value)}
             style={{ flex: 1, minWidth: '300px' }}
@@ -1404,6 +1405,9 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
                   </a>
                   <a href={buildAffiliateUrl(`https://www.chemistwarehouse.com.au/search?query=${encodeURIComponent(matchResults.original.name)}&contexts=default`, affiliateSettings)} target="_blank" rel="noreferrer" className="btn-primary" style={{ background: '#0070ba', textDecoration: 'none', padding: '6px 12px', fontSize: '0.9rem' }}>
                     Search Chemist Warehouse
+                  </a>
+                  <a href={`https://www.aldi.com.au/results?q=${encodeURIComponent(matchResults.original.name)}`} target="_blank" rel="noreferrer" className="btn-primary" style={{ background: '#002d72', textDecoration: 'none', padding: '6px 12px', fontSize: '0.9rem' }}>
+                    Search ALDI
                   </a>
                 </div>
               </div>

@@ -110,6 +110,7 @@ function getRetailerName(url) {
   const lower = url.toLowerCase();
   if (lower.includes('coles.com.au')) return 'Coles';
   if (lower.includes('woolworths.com.au')) return 'Woolworths';
+  if (lower.includes('aldi.com.au')) return 'ALDI';
   if (lower.includes('amazon.')) return 'Amazon';
   if (lower.includes('chemistwarehouse.com.au')) return 'Chemist Warehouse';
   if (lower.includes('petcircle.com.au')) return 'Pet Circle';

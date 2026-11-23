@@ -9,6 +9,7 @@ const INITIAL_SCRAPERS = {
   amazon: { name: 'Amazon Australia', key: 'amazon', domain: 'amazon.com.au' },
   coles: { name: 'Coles', key: 'coles', domain: 'coles.com.au' },
   woolworths: { name: 'Woolworths', key: 'woolworths', domain: 'woolworths.com.au' },
+  aldi: { name: 'ALDI', key: 'aldi', domain: 'aldi.com.au' },
   chemistwarehouse: { name: 'Chemist Warehouse', key: 'chemistwarehouse', domain: 'chemistwarehouse.com.au' },
   petcircle: { name: 'Pet Circle', key: 'petcircle', domain: 'petcircle.com.au' },
   bunnings: { name: 'Bunnings Warehouse', key: 'bunnings', domain: 'bunnings.com.au' },
@@ -84,6 +85,7 @@ function getScraperKeyForUrl(url) {
   if (lower.includes('amazon.')) return 'amazon';
   if (lower.includes('coles.com.au')) return 'coles';
   if (lower.includes('woolworths.com.au')) return 'woolworths';
+  if (lower.includes('aldi.com.au')) return 'aldi';
   if (lower.includes('chemistwarehouse.com.au')) return 'chemistwarehouse';
   if (lower.includes('petcircle.com.au')) return 'petcircle';
   if (lower.includes('bunnings.com.au')) return 'bunnings';
@@ -221,6 +223,7 @@ async function runCanaryProbe(targetKey = null) {
     amazon: 'https://www.amazon.com.au/dp/B07PJV3JPR',
     coles: 'https://www.coles.com.au/product/coles-full-cream-milk-3l-5353140',
     woolworths: 'https://www.woolworths.com.au/shop/productdetails/134444/woolworths-full-cream-milk',
+    aldi: 'https://www.aldi.com.au/product/power-force-disinfectant-wipes-110-pack-000000000000649583',
     chemistwarehouse: 'https://www.chemistwarehouse.com.au/buy/101859/panadol-optizorb-caplets-500mg-100-pack',
     petcircle: 'https://www.petcircle.com.au/product/nexgard-spectra-very-large-dog/dhn2245',
     bunnings: 'https://www.bunnings.com.au/craftright-8oz-226g-steel-claw-hammer_p5660292',
@@ -250,7 +253,7 @@ async function runCanaryProbe(targetKey = null) {
       let res = null;
 
       if (key === 'amazon') res = await scrapeAmazon(url);
-      else if (key === 'coles' || key === 'woolworths') res = await scrapeSupermarket(url);
+      else if (key === 'coles' || key === 'woolworths' || key === 'aldi') res = await scrapeSupermarket(url);
       else if (key === 'chemistwarehouse') res = await scrapeChemistWarehouse(url);
       else if (key === 'petcircle') res = await scrapePetCircle(url);
       else res = await scrapeRetailer(url);

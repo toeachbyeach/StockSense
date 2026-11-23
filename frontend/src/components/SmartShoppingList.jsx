@@ -798,8 +798,8 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {filteredItems.map(item => {
               const isChecked = !!checkedItems[item.groupId];
-              const storeColor = item.bestStore === 'coles' ? '#e01a22' : (item.bestStore === 'woolworths' ? '#178841' : (item.bestStore === 'amazon' ? '#ff9900' : 'var(--accent)'));
-              const storeName = item.bestStore === 'coles' ? 'Coles' : (item.bestStore === 'woolworths' ? 'Woolworths' : (item.bestStore === 'amazon' ? 'Amazon' : item.bestStore.toUpperCase()));
+              const storeColor = item.bestStore === 'coles' ? '#e01a22' : (item.bestStore === 'woolworths' ? '#178841' : (item.bestStore === 'aldi' ? '#002d72' : (item.bestStore === 'amazon' ? '#ff9900' : 'var(--accent)')));
+              const storeName = item.bestStore === 'coles' ? 'Coles' : (item.bestStore === 'woolworths' ? 'Woolworths' : (item.bestStore === 'aldi' ? 'ALDI' : (item.bestStore === 'amazon' ? 'Amazon' : item.bestStore.toUpperCase())));
 
               return (
                 <div

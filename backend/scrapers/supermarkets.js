@@ -95,6 +95,47 @@ async function doScrapeSupermarket(url, lat = -33.8688, lng = 151.2093) {
         result.price = parseFloat(priceStr.replace(/[^0-9.]/g, '')) || null;
         result.imageUrl = await page.$eval('.product-image img', el => el.getAttribute('src')).catch(() => null);
       }
+    } else if (url.includes('aldi.com.au')) {
+      log(`[Supermarket] Extracting ALDI data...`);
+      const aldiData = await page.evaluate(() => {
+        // 1. JSON-LD Product schema
+        const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+        for (const s of scripts) {
+          try {
+            const parsed = JSON.parse(s.textContent);
+            if (parsed && (parsed['@type'] === 'Product' || parsed['@type']?.includes?.('Product'))) {
+              const brand = (parsed.brand && typeof parsed.brand === 'object' ? parsed.brand.name : parsed.brand) || '';
+              const name = parsed.name || '';
+              const fullName = brand && !name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${name}` : name;
+              const price = parsed.offers && parsed.offers.price ? parseFloat(parsed.offers.price) : null;
+              const image = Array.isArray(parsed.image) ? parsed.image[0] : (parsed.image || null);
+              const isAvail = parsed.offers?.availability ? parsed.offers.availability.includes('InStock') : true;
+              return { name: fullName, price, imageUrl: image, inStock: isAvail ? 'In Stock' : 'Out of Stock' };
+            }
+          } catch (e) {}
+        }
+
+        // 2. Fallbacks from DOM
+        const brandEl = document.querySelector('[data-test="product-tile__brandname"] p, .product-details__brandname');
+        const nameEl = document.querySelector('[data-test="product-tile__name"] p, .product-details__name, h1');
+        const brand = brandEl ? brandEl.textContent.trim() : '';
+        const name = nameEl ? nameEl.textContent.trim() : (document.title || '');
+        const fullName = brand && !name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${name}` : name;
+
+        const priceEl = document.querySelector('.base-price__regular span, .base-price, [data-test*="price"]');
+        const priceStr = priceEl ? priceEl.textContent.trim() : '';
+        const price = priceStr ? parseFloat(priceStr.replace(/[^0-9.]/g, '')) : null;
+
+        const imgEl = document.querySelector('.product-details__picture img, .base-image, img');
+        const imageUrl = imgEl ? (imgEl.src || imgEl.getAttribute('src')) : null;
+
+        return { name: fullName, price, imageUrl, inStock: 'In Stock' };
+      });
+
+      result.name = aldiData.name;
+      result.price = aldiData.price;
+      result.imageUrl = aldiData.imageUrl;
+      result.inStock = aldiData.inStock || 'In Stock';
     }
 
     if (result.price !== null) {
@@ -119,6 +160,8 @@ async function searchSupermarket(query, retailer, lat = -33.8688, lng = 151.2093
       return await searchColes(query);
     } else if (retailer === 'woolworths') {
       return await searchWoolworths(query);
+    } else if (retailer === 'aldi') {
+      return await searchAldi(query);
     }
     return [];
   } catch (err) {
@@ -223,6 +266,57 @@ async function searchWoolworths(query) {
     global.taskStatus = msg;
     log(`[Woolworths Search API] Failed: ${err.message}, falling back to Puppeteer`, 'WARN');
     return await searchSupermarketPuppeteer(query, 'woolworths');
+  }
+}
+
+async function searchAldi(query) {
+  try {
+    global.taskStatus = `Searching ALDI API/HTML...`;
+    const url = `https://www.aldi.com.au/results?q=${encodeURIComponent(query)}`;
+    log(`[ALDI Search] Fetching: ${url}`);
+
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const data = await res.text();
+    const results = [];
+    const tileRegex = /class="product-tile"[^>]*>([\s\S]*?)<\/button>/gi;
+    let match;
+    while ((match = tileRegex.exec(data)) !== null && results.length < 10) {
+      const tile = match[1];
+      const urlMatch = tile.match(/href="(\/product\/[^"]+)"/i);
+      const brandMatch = tile.match(/data-test="product-tile__brandname"[^>]*><p[^>]*>([^<]+)<\/p>/i);
+      const nameMatch = tile.match(/data-test="product-tile__name"[^>]*><p[^>]*>([^<]+)<\/p>/i);
+      const priceMatch = tile.match(/class="base-price__regular"[^>]*><span>\$([0-9.]+)<\/span>/i);
+      const imgMatch = tile.match(/src="(https:\/\/dm\.apac\.cms\.aldi\.cx\/[^"]+)"/i);
+
+      if (urlMatch && (nameMatch || brandMatch) && priceMatch) {
+        const brand = brandMatch ? brandMatch[1].trim() : '';
+        const name = nameMatch ? nameMatch[1].trim() : '';
+        const fullName = brand && !name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${name}` : name;
+        results.push({
+          name: fullName,
+          price: parseFloat(priceMatch[1]),
+          url: `https://www.aldi.com.au${urlMatch[1]}`,
+          imageUrl: imgMatch ? imgMatch[1] : null,
+          inStock: 'In Stock'
+        });
+      }
+    }
+
+    log(`[ALDI Search] Found ${results.length} results`);
+    return results;
+  } catch (err) {
+    log(`[ALDI Search] Failed: ${err.message}`, 'WARN');
+    return [];
   }
 }
 

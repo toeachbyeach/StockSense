@@ -476,6 +476,7 @@ app.get('/api/basket', authenticateToken, (req, res) => {
         const lower = u.toLowerCase();
         if (lower.includes('coles.com.au')) return 'coles';
         if (lower.includes('woolworths.com.au')) return 'woolworths';
+        if (lower.includes('aldi.com.au')) return 'aldi';
         if (lower.includes('amazon.')) return 'amazon';
         if (lower.includes('chemistwarehouse.com.au')) return 'chemistwarehouse';
         if (lower.includes('bunnings.com.au')) return 'bunnings';
@@ -651,14 +652,19 @@ function getTargetRetailersForMatch(url, productName = '') {
     return ['bunnings'];
   }
 
-  // 2. Coles: search Woolworths and Amazon
+  // 2. Coles: search Woolworths, ALDI, and Amazon
   if (u.includes('coles.com.au')) {
-    return ['woolworths', 'amazon'];
+    return ['woolworths', 'aldi', 'amazon'];
   }
 
-  // 3. Woolworths: search Coles and Amazon
+  // 3. Woolworths: search Coles, ALDI, and Amazon
   if (u.includes('woolworths.com.au')) {
-    return ['coles', 'amazon'];
+    return ['coles', 'aldi', 'amazon'];
+  }
+
+  // ALDI: search Coles, Woolworths, and Amazon
+  if (u.includes('aldi.com.au')) {
+    return ['coles', 'woolworths', 'amazon'];
   }
 
   // 4. JB Hi-Fi: search The Good Guys, Amazon, and optionally Officeworks if computer/tech
@@ -726,6 +732,7 @@ function getTargetRetailersForMatch(url, productName = '') {
     } else if (/snack|chocolate|coffee|tea|cereal|sauce|pasta|rice|oil|biscuit|drink|water|cleaner|detergent|dish|laundry|wipe|towel|paper/i.test(name)) {
       targets.add('coles');
       targets.add('woolworths');
+      targets.add('aldi');
     }
     // Pets
     if (/dog|cat|pet|puppy|kitten|flea|tick|worm|nexgard|bravecto|simparica|royal canin|hills|advance|black hawk/i.test(name)) {
@@ -831,7 +838,7 @@ async function findProductMatches(url) {
     db.get('SELECT latitude, longitude, hasAmazonPrime FROM settings WHERE id = 1', (err, row) => resolve(row || { latitude: -33.8688, longitude: 151.2093, hasAmazonPrime: 0 }));
   });
 
-  if (url.includes('coles.com.au') || url.includes('woolworths.com.au')) {
+  if (url.includes('coles.com.au') || url.includes('woolworths.com.au') || url.includes('aldi.com.au')) {
     original = await scrapeSupermarket(url, settings.latitude, settings.longitude);
   } else if (url.includes('amazon')) {
     original = await scrapeAmazon(url);
@@ -922,7 +929,7 @@ async function findProductMatches(url) {
 
   global.taskStatus = `Searching alternative stores (${targetRetailers.join(', ')})...`;
   const promises = targetRetailers.map(retailer => {
-    if (retailer === 'coles' || retailer === 'woolworths') {
+    if (retailer === 'coles' || retailer === 'woolworths' || retailer === 'aldi') {
       return searchWithDegradation(retailer, uniqueWords, settings.latitude, settings.longitude);
     }
     return searchWithDegradation(retailer, uniqueWords);
@@ -1070,7 +1077,7 @@ app.post('/api/match/manual', authenticateToken, async (req, res) => {
     let alternative = null;
     
     // Supports Coles, Woolworths, Chemist Warehouse, Amazon, Pet Circle, Bunnings, Officeworks, JB Hi-Fi, The Iconic, etc.
-    if (url.includes('coles.com.au') || url.includes('woolworths.com.au')) {
+    if (url.includes('coles.com.au') || url.includes('woolworths.com.au') || url.includes('aldi.com.au')) {
       const { scrapeSupermarket } = require('./scrapers/supermarkets');
       alternative = await scrapeSupermarket(url);
     } else if (url.includes('chemistwarehouse.com.au')) {
@@ -1122,7 +1129,7 @@ app.post('/api/product-info', authenticateToken, async (req, res) => {
       db.get('SELECT latitude, longitude, hasAmazonPrime FROM settings WHERE id = 1', (err, row) => resolve(row || { latitude: -33.8688, longitude: 151.2093, hasAmazonPrime: 0 }));
     });
 
-    if (url.includes('coles.com.au') || url.includes('woolworths.com.au')) {
+    if (url.includes('coles.com.au') || url.includes('woolworths.com.au') || url.includes('aldi.com.au')) {
       info = await scrapeSupermarket(url, settings.latitude, settings.longitude);
     } else if (url.includes('amazon')) {
       info = await scrapeAmazon(url);
@@ -2224,7 +2231,7 @@ function updateGroupNameIfPlaceholder(groupId, name) {
   if (!groupId || !name) return;
   db.get('SELECT name FROM product_groups WHERE id = ?', [groupId], (err, row) => {
     if (err || !row || !row.name) return;
-    if (/^(New Group|Amazon item|Coles item|Woolworths item|Chemist Warehouse item|New item)/i.test(row.name.trim())) {
+    if (/^(New Group|Amazon item|Coles item|Woolworths item|ALDI item|Chemist Warehouse item|New item)/i.test(row.name.trim())) {
       db.run('UPDATE product_groups SET name = ? WHERE id = ?', [name, groupId]);
     }
   });
@@ -2261,7 +2268,7 @@ async function syncItem(item) {
         } catch (e) {}
       }
 
-      if (item.url.includes('coles.com.au') || item.url.includes('woolworths.com.au') || item.url.includes('iga.com.au')) {
+      if (item.url.includes('coles.com.au') || item.url.includes('woolworths.com.au') || item.url.includes('aldi.com.au') || item.url.includes('iga.com.au')) {
         result = await scrapeSupermarket(item.url, settings.latitude, settings.longitude);
       } else if (item.url.includes('amazon')) {
         result = await scrapeAmazon(item.url);
