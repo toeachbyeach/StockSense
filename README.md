@@ -134,6 +134,11 @@ You can add items with one click while browsing any supported retailer:
 
 ---
 
-## 📄 License
+## 📄 License & Commercial Inquiries
 
-This project is licensed under the MIT License.
+StockSense is dual-licensed under the **GNU Affero General Public License v3.0 (AGPLv3)** and a **Commercial License**:
+
+- **Open Source (AGPLv3)**: StockSense is free software for personal and self-hosted use. Anyone may use, inspect, and modify it under the terms of the AGPLv3. Any public network service or deployment based on modified versions must share its complete source code under AGPLv3.
+- **Commercial License**: If you wish to use StockSense commercially, offer it as a paid hosted service, or integrate it into proprietary software without open-sourcing your stack, a commercial license is required.
+
+For commercial inquiries, licensing, or custom integrations, please contact via [GitHub](https://github.com/toeachbyeach).
