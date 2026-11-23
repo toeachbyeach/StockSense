@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  stocksense:
+    image: ghcr.io/toeachbyeach/stocksense:main
+    container_name: stocksense
+    restart: unless-stopped
+    init: true
+    shm_size: '1gb'
+    pids_limit: 1024
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=Australia/Sydney
+      - ENCRYPTION_KEY=change-this-to-a-random-secret-key-32-chars-long
+      - PASSWORD=changeme123
+      # Add this line if you ever want to force Puppeteer into non-headless for debugging
+      # - DISPLAY=:99
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
