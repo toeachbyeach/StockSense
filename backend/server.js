@@ -2658,15 +2658,6 @@ cron.schedule('0 8 * * *', () => {
   });
 });
 
-// Cron: Weekly Catalogue Cycle Reminder on Tuesday 6 PM (Supermarket catalogues launch Wednesday)
-cron.schedule('0 18 * * 2', () => {
-  log('[CRON] Sending Tuesday catalogue cycle reminder...');
-  sendAlert(
-    '🛒 Coles & Woolies Half-Price Specials Launch Tomorrow!',
-    'Friendly reminder: Australian supermarket catalogue specials and half-price discounts update overnight tonight (Wednesday morning). Check your StockSense shopping list tomorrow morning to capture the best weekly bargains!'
-  );
-});
-
 // Cron: Weekly Database Auto-Vacuum and Cleanup (Sundays 3 AM)
 cron.schedule('0 3 * * 0', () => {
   log('[CRON] Running weekly database VACUUM and optimization...');
