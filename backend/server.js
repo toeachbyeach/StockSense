@@ -14,8 +14,16 @@ const log = require('./logger');
 const { sendAlert } = require('./notifier');
 const { encrypt } = require('./crypto');
 const fs = require('fs');
+const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
+const { categorizeItem, DEPARTMENTS } = require('./utils/aisleMatcher');
+const { predictSaleCycle } = require('./utils/salePredictor');
+
+const backupsDir = path.resolve(__dirname, 'data', 'backups');
+if (!fs.existsSync(backupsDir)) {
+  fs.mkdirSync(backupsDir, { recursive: true });
+}
 const upload = multer({ dest: 'data/uploads/' });
 
 const path = require('path');
@@ -289,6 +297,8 @@ app.get('/api/settings', authenticateToken, (req, res) => {
     row.ntfyServer = row.ntfyServer || 'https://ntfy.sh';
     row.amazonAssociateTag = row.amazonAssociateTag || process.env.AMAZON_ASSOCIATE_TAG || '';
     row.affiliatePrefix = row.affiliatePrefix || '';
+    row.everydayRewardsExtra = Boolean(row.everydayRewardsExtra);
+    row.flybuysMember = Boolean(row.flybuysMember);
     res.json(row);
   });
 });
@@ -300,7 +310,8 @@ app.post('/api/settings', authenticateToken, (req, res) => {
     latitude, longitude, dashboardColumns, hasAmazonPrime, trackAmazonUsed,
     giftCardDiscount, quietHoursEnabled, quietHoursStart, quietHoursEnd,
     telegramBotToken, telegramChatId, ntfyTopic, ntfyServer,
-    amazonAssociateTag, affiliatePrefix
+    amazonAssociateTag, affiliatePrefix,
+    everydayRewardsExtra, flybuysMember
   } = req.body;
   
   let query = `UPDATE settings SET gmailUser = ?, discordWebhook = ?, globalNotify = ?, digestFrequency = ?, latitude = ?, longitude = ?`;
@@ -362,6 +373,14 @@ app.post('/api/settings', authenticateToken, (req, res) => {
   if (affiliatePrefix !== undefined) {
     query += `, affiliatePrefix = ?`;
     params.push(affiliatePrefix ? affiliatePrefix.trim() : '');
+  }
+  if (everydayRewardsExtra !== undefined) {
+    query += `, everydayRewardsExtra = ?`;
+    params.push(everydayRewardsExtra ? 1 : 0);
+  }
+  if (flybuysMember !== undefined) {
+    query += `, flybuysMember = ?`;
+    params.push(flybuysMember ? 1 : 0);
   }
   
   query += ` WHERE id = 1`;
@@ -436,178 +455,828 @@ app.get('/api/public/list', (req, res) => {
   });
 });
 
-// API: Shopping Cart / Basket Split Optimizer
+// API: Shopping Cart / Basket Split Optimizer & Multi-Store Loyalty Calculator
 app.get('/api/basket', authenticateToken, (req, res) => {
-  // Query all active groups with all their item sources
   const showAll = req.query.all === '1';
-  const groupQuery = `SELECT id, name, routineQuantity, routineFrequency, isRoutine, currentPrice, unitPriceDisplay FROM product_groups`;
-  db.all(groupQuery, [], (err, groups) => {
-    if (err) return res.status(500).json({ error: err.message });
 
-    const itemQuery = `SELECT id, group_id, url, name, currentPrice, inStock, packQuantity, volumeQuantity, volumeUnit, imageUrl FROM items WHERE currentPrice IS NOT NULL`;
-    db.all(itemQuery, [], (err2, items) => {
-      if (err2) return res.status(500).json({ error: err2.message });
+  db.get('SELECT everydayRewardsExtra, flybuysMember, amazonAssociateTag, affiliatePrefix FROM settings WHERE id = 1', (errSettings, settingsRow) => {
+    const settings = settingsRow || {};
+    const everydayRewardsExtra = Boolean(settings.everydayRewardsExtra);
+    const flybuysMember = Boolean(settings.flybuysMember);
 
-      // Also fetch active items from external list syncs (Home Assistant, Todoist, etc.)
-      const syncedQuery = `
-        SELECT sli.id as syncedItemId, sli.group_id, sli.raw_text, sli.quantity as syncedQty, sli.external_service, li.name as integrationName
-        FROM synced_list_items sli
-        LEFT JOIN list_integrations li ON sli.integration_id = li.id
-        WHERE sli.status = 'active' AND sli.group_id IS NOT NULL
-      `;
-      db.all(syncedQuery, [], (err3, syncedList) => {
-        const syncedByGroup = {};
-        if (!err3 && Array.isArray(syncedList)) {
-          syncedList.forEach(sli => {
-            if (!syncedByGroup[sli.group_id]) syncedByGroup[sli.group_id] = [];
-            syncedByGroup[sli.group_id].push(sli);
+    const groupQuery = `SELECT id, name, routineQuantity, routineFrequency, isRoutine, currentPrice, unitPriceDisplay, tags, lastPurchased, intervalWeeks FROM product_groups`;
+    db.all(groupQuery, [], (err, groups) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      const itemQuery = `SELECT id, group_id, url, name, currentPrice, inStock, packQuantity, volumeQuantity, volumeUnit, imageUrl FROM items WHERE currentPrice IS NOT NULL`;
+      db.all(itemQuery, [], (err2, items) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+
+        // Fetch active items from external list syncs (Home Assistant, Todoist, etc.)
+        const syncedQuery = `
+          SELECT sli.id as syncedItemId, sli.group_id, sli.raw_text, sli.quantity as syncedQty, sli.external_service, li.name as integrationName
+          FROM synced_list_items sli
+          LEFT JOIN list_integrations li ON sli.integration_id = li.id
+          WHERE sli.status = 'active' AND sli.group_id IS NOT NULL
+        `;
+        db.all(syncedQuery, [], (err3, syncedList) => {
+          const syncedByGroup = {};
+          if (!err3 && Array.isArray(syncedList)) {
+            syncedList.forEach(sli => {
+              if (!syncedByGroup[sli.group_id]) syncedByGroup[sli.group_id] = [];
+              syncedByGroup[sli.group_id].push(sli);
+            });
+          }
+
+          const itemsByGroup = {};
+          items.forEach(it => {
+            if (!itemsByGroup[it.group_id]) itemsByGroup[it.group_id] = [];
+            itemsByGroup[it.group_id].push(it);
           });
-        }
 
-        const itemsByGroup = {};
-        items.forEach(it => {
-          if (!itemsByGroup[it.group_id]) itemsByGroup[it.group_id] = [];
-          itemsByGroup[it.group_id].push(it);
+          // Retailer categorization helper
+          const getStore = (u) => {
+            if (!u) return 'other';
+            const lower = u.toLowerCase();
+            if (lower.includes('coles.com.au')) return 'coles';
+            if (lower.includes('woolworths.com.au')) return 'woolworths';
+            if (lower.includes('aldi.com.au')) return 'aldi';
+            if (lower.includes('amazon.')) return 'amazon';
+            if (lower.includes('chemistwarehouse.com.au')) return 'chemistwarehouse';
+            if (lower.includes('bunnings.com.au')) return 'bunnings';
+            if (lower.includes('jbhifi.com.au')) return 'jbhifi';
+            if (lower.includes('thegoodguys.com.au')) return 'thegoodguys';
+            if (lower.includes('petcircle.com.au')) return 'petcircle';
+            if (lower.includes('priceline.com.au')) return 'priceline';
+            if (lower.includes('terrywhitechemmart.com.au')) return 'terrywhite';
+            if (lower.includes('cincottachemist.com.au')) return 'cincotta';
+            if (lower.includes('bloomsthechemist.com.au')) return 'bloomsthechemist';
+            if (lower.includes('petbarn.com.au')) return 'petbarn';
+            if (lower.includes('petstock.com.au')) return 'petstock';
+            if (lower.includes('budgetpetproducts.com.au')) return 'budgetpetproducts';
+            if (lower.includes('petchemist.com.au')) return 'petchemist';
+            return 'other';
+          };
+
+          const allRecommendations = [];
+          const routineRecommendations = [];
+          const otherRecommendations = [];
+
+          let totalOptimizedCost = 0;
+          const storeTotals = {
+            coles: { cost: 0, count: 0, missing: 0 },
+            woolworths: { cost: 0, count: 0, missing: 0 },
+            aldi: { cost: 0, count: 0, missing: 0 },
+            amazon: { cost: 0, count: 0, missing: 0 },
+            chemistwarehouse: { cost: 0, count: 0, missing: 0 }
+          };
+
+          const splitBreakdown = {};
+
+          groups.forEach(g => {
+            const sources = itemsByGroup[g.id] || [];
+            if (sources.length === 0) return;
+
+            // Find cheapest source overall & per retailer
+            let best = sources[0];
+            const storeSources = {};
+
+            sources.forEach(s => {
+              if (s.currentPrice < best.currentPrice) best = s;
+              const storeKey = getStore(s.url);
+              if (!storeSources[storeKey] || s.currentPrice < storeSources[storeKey].currentPrice) {
+                storeSources[storeKey] = s;
+              }
+            });
+
+            const bestStore = getStore(best.url);
+            const syncedItemsForGroup = syncedByGroup[g.id] || [];
+            const hasExternalSync = syncedItemsForGroup.length > 0;
+            let syncedQty = 0;
+            if (hasExternalSync) {
+              syncedQty = syncedItemsForGroup.reduce((sum, s) => sum + (s.syncedQty || 1), 0);
+            }
+
+            const qty = Math.max(1, g.routineQuantity || 1, syncedQty);
+            const isRoutine = Boolean(
+              hasExternalSync ||
+              g.isRoutine === 1 || 
+              g.isRoutine === true || 
+              (g.routineFrequency && g.routineFrequency.trim() !== '')
+            );
+            const imageUrl = best.imageUrl || (sources.find(s => s.imageUrl)?.imageUrl) || null;
+
+            // Australian Supermarket Aisle & Department Categorization
+            const dept = categorizeItem(g.name, g.tags);
+
+            const rec = {
+              groupId: g.id,
+              groupName: g.name,
+              quantity: qty,
+              routineFrequency: g.routineFrequency || 'weekly',
+              isRoutine,
+              fromExternalList: hasExternalSync,
+              syncedItems: syncedItemsForGroup,
+              imageUrl,
+              unitPriceDisplay: g.unitPriceDisplay || null,
+              bestStore,
+              bestPrice: best.currentPrice,
+              bestUrl: best.url ? buildAffiliateUrl(best.url, settings) : null,
+              bestSourceId: best.id,
+              department: dept.id,
+              departmentName: dept.name,
+              departmentIcon: dept.icon,
+              departmentOrder: dept.order,
+              colesPrice: storeSources.coles ? storeSources.coles.currentPrice : null,
+              colesUrl: storeSources.coles ? buildAffiliateUrl(storeSources.coles.url, settings) : null,
+              wooliesPrice: storeSources.woolworths ? storeSources.woolworths.currentPrice : null,
+              wooliesUrl: storeSources.woolworths ? buildAffiliateUrl(storeSources.woolworths.url, settings) : null,
+              aldiPrice: storeSources.aldi ? storeSources.aldi.currentPrice : null,
+              aldiUrl: storeSources.aldi ? storeSources.aldi.url : null,
+              amazonPrice: storeSources.amazon ? storeSources.amazon.currentPrice : null,
+              amazonUrl: storeSources.amazon ? buildAffiliateUrl(storeSources.amazon.url, settings) : null,
+              cwPrice: storeSources.chemistwarehouse ? storeSources.chemistwarehouse.currentPrice : null,
+              cwUrl: storeSources.chemistwarehouse ? storeSources.chemistwarehouse.url : null,
+              storePrices: {
+                coles: storeSources.coles ? storeSources.coles.currentPrice : null,
+                woolworths: storeSources.woolworths ? storeSources.woolworths.currentPrice : null,
+                aldi: storeSources.aldi ? storeSources.aldi.currentPrice : null,
+                amazon: storeSources.amazon ? storeSources.amazon.currentPrice : null,
+                chemistwarehouse: storeSources.chemistwarehouse ? storeSources.chemistwarehouse.currentPrice : null
+              },
+              savings: (storeSources.coles && storeSources.woolworths) ? Math.abs(storeSources.coles.currentPrice - storeSources.woolworths.currentPrice) * qty : 0,
+              sourcesCount: sources.length
+            };
+
+            allRecommendations.push(rec);
+
+            if (isRoutine) {
+              routineRecommendations.push(rec);
+              totalOptimizedCost += best.currentPrice * qty;
+
+              // Tally unconstrained split
+              if (!splitBreakdown[bestStore]) {
+                splitBreakdown[bestStore] = {
+                  store: bestStore,
+                  count: 0,
+                  subtotal: 0,
+                  items: []
+                };
+              }
+              splitBreakdown[bestStore].count += 1;
+              splitBreakdown[bestStore].subtotal += best.currentPrice * qty;
+              splitBreakdown[bestStore].items.push(rec);
+
+              // Tally single store baskets
+              Object.keys(storeTotals).forEach(st => {
+                if (storeSources[st]) {
+                  storeTotals[st].cost += storeSources[st].currentPrice * qty;
+                  storeTotals[st].count += 1;
+                } else {
+                  storeTotals[st].missing += 1;
+                }
+              });
+            } else {
+              otherRecommendations.push(rec);
+            }
+          });
+
+          const selectedItems = showAll ? allRecommendations : routineRecommendations;
+
+          // Compute Constrained 2-Store Split (Find optimal pair of stores e.g. ALDI + Coles or ALDI + Woolworths)
+          const trackedStores = ['coles', 'woolworths', 'aldi', 'amazon', 'chemistwarehouse'];
+          let bestTwoStorePair = null;
+          let bestTwoStoreCost = Infinity;
+          let bestTwoStoreSplit = null;
+
+          if (routineRecommendations.length > 0) {
+            for (let i = 0; i < trackedStores.length; i++) {
+              for (let j = i + 1; j < trackedStores.length; j++) {
+                const s1 = trackedStores[i];
+                const s2 = trackedStores[j];
+                let pairCost = 0;
+                let s1Items = [];
+                let s2Items = [];
+                let fallbackItems = [];
+
+                routineRecommendations.forEach(item => {
+                  const p1 = item.storePrices[s1];
+                  const p2 = item.storePrices[s2];
+                  const q = item.quantity;
+
+                  if (p1 != null && p2 != null) {
+                    if (p1 <= p2) {
+                      pairCost += p1 * q;
+                      s1Items.push({ ...item, chosenStore: s1, chosenPrice: p1 });
+                    } else {
+                      pairCost += p2 * q;
+                      s2Items.push({ ...item, chosenStore: s2, chosenPrice: p2 });
+                    }
+                  } else if (p1 != null) {
+                    pairCost += p1 * q;
+                    s1Items.push({ ...item, chosenStore: s1, chosenPrice: p1 });
+                  } else if (p2 != null) {
+                    pairCost += p2 * q;
+                    s2Items.push({ ...item, chosenStore: s2, chosenPrice: p2 });
+                  } else {
+                    // Fallback to best available store if neither of the two carry it
+                    pairCost += item.bestPrice * q;
+                    fallbackItems.push({ ...item, chosenStore: item.bestStore, chosenPrice: item.bestPrice });
+                  }
+                });
+
+                if (pairCost < bestTwoStoreCost) {
+                  bestTwoStoreCost = pairCost;
+                  bestTwoStorePair = [s1, s2];
+                  bestTwoStoreSplit = {
+                    pair: [s1, s2],
+                    store1: { store: s1, items: s1Items, subtotal: s1Items.reduce((acc, it) => acc + it.chosenPrice * it.quantity, 0) },
+                    store2: { store: s2, items: s2Items, subtotal: s2Items.reduce((acc, it) => acc + it.chosenPrice * it.quantity, 0) },
+                    fallback: { items: fallbackItems, subtotal: fallbackItems.reduce((acc, it) => acc + it.chosenPrice * it.quantity, 0) },
+                    totalCost: pairCost
+                  };
+                }
+              }
+            }
+          }
+
+          // Loyalty Program Calculations
+          const totalWooliesCost = storeTotals.woolworths.count > 0 ? storeTotals.woolworths.cost : null;
+          const totalColesCost = storeTotals.coles.count > 0 ? storeTotals.coles.cost : null;
+
+          // Woolworths Everyday Extra 10% monthly perk (capped at $50 per shop)
+          const wooliesPerkDiscount = totalWooliesCost ? Math.min(50, totalWooliesCost * 0.10) : 0;
+          const wooliesDiscountedCost = totalWooliesCost ? Math.max(0, totalWooliesCost - wooliesPerkDiscount) : null;
+
+          // Flybuys rewards calculation for Coles
+          const flybuysPoints = totalColesCost ? Math.floor(totalColesCost) : 0;
+          const flybuysDollarValue = (flybuysPoints / 2000) * 10;
+
+          // Compare single stores and splits
+          const singleStoreComparisons = [];
+          if (totalColesCost) {
+            singleStoreComparisons.push({
+              store: 'coles',
+              name: 'Coles',
+              cost: totalColesCost,
+              missingCount: storeTotals.coles.missing,
+              savingsVsSplit: totalColesCost - totalOptimizedCost
+            });
+          }
+          if (totalWooliesCost) {
+            singleStoreComparisons.push({
+              store: 'woolworths',
+              name: 'Woolworths',
+              cost: totalWooliesCost,
+              discountedCost: everydayRewardsExtra ? wooliesDiscountedCost : null,
+              loyaltyDiscount: everydayRewardsExtra ? wooliesPerkDiscount : null,
+              missingCount: storeTotals.woolworths.missing,
+              savingsVsSplit: totalWooliesCost - totalOptimizedCost
+            });
+          }
+          if (storeTotals.aldi.count > 0) {
+            singleStoreComparisons.push({
+              store: 'aldi',
+              name: 'ALDI',
+              cost: storeTotals.aldi.cost,
+              missingCount: storeTotals.aldi.missing,
+              savingsVsSplit: storeTotals.aldi.cost - totalOptimizedCost
+            });
+          }
+
+          // Group checklist items by Department for physical walking order
+          const itemsByDepartment = {};
+          DEPARTMENTS.forEach(dept => {
+            itemsByDepartment[dept.id] = {
+              id: dept.id,
+              name: dept.name,
+              icon: dept.icon,
+              order: dept.order,
+              items: []
+            };
+          });
+
+          selectedItems.forEach(item => {
+            const deptId = item.department || 'other';
+            if (!itemsByDepartment[deptId]) {
+              itemsByDepartment[deptId] = {
+                id: deptId,
+                name: 'General & Other',
+                icon: '🛒',
+                order: 99,
+                items: []
+              };
+            }
+            itemsByDepartment[deptId].items.push(item);
+          });
+
+          const departmentsList = Object.values(itemsByDepartment)
+            .filter(d => d.items.length > 0)
+            .sort((a, b) => a.order - b.order);
+
+          res.json({
+            totalOptimizedCost,
+            totalColesCost,
+            totalWooliesCost,
+            wooliesDiscountedCost,
+            wooliesPerkDiscount,
+            flybuysPoints,
+            flybuysDollarValue,
+            everydayRewardsExtra,
+            flybuysMember,
+            potentialSplitSavings: (totalColesCost && totalWooliesCost) 
+              ? Math.max(0, Math.min(totalColesCost, totalWooliesCost) - totalOptimizedCost) 
+              : 0,
+            splitBreakdown,
+            twoStoreOptimal: bestTwoStoreSplit,
+            singleStoreComparisons,
+            departments: departmentsList,
+            items: selectedItems,
+            routineCount: routineRecommendations.length,
+            totalTrackedCount: allRecommendations.length,
+            otherItems: otherRecommendations
+          });
         });
-
-      // Retailer categorization helpers
-      const getStore = (u) => {
-        if (!u) return 'other';
-        const lower = u.toLowerCase();
-        if (lower.includes('coles.com.au')) return 'coles';
-        if (lower.includes('woolworths.com.au')) return 'woolworths';
-        if (lower.includes('aldi.com.au')) return 'aldi';
-        if (lower.includes('amazon.')) return 'amazon';
-        if (lower.includes('chemistwarehouse.com.au')) return 'chemistwarehouse';
-        if (lower.includes('bunnings.com.au')) return 'bunnings';
-        if (lower.includes('jbhifi.com.au')) return 'jbhifi';
-        if (lower.includes('thegoodguys.com.au')) return 'thegoodguys';
-        if (lower.includes('petcircle.com.au')) return 'petcircle';
-        if (lower.includes('priceline.com.au')) return 'priceline';
-        if (lower.includes('terrywhitechemmart.com.au')) return 'terrywhite';
-        if (lower.includes('cincottachemist.com.au')) return 'cincotta';
-        if (lower.includes('bloomsthechemist.com.au')) return 'bloomsthechemist';
-        if (lower.includes('petbarn.com.au')) return 'petbarn';
-        if (lower.includes('petstock.com.au')) return 'petstock';
-        if (lower.includes('budgetpetproducts.com.au')) return 'budgetpetproducts';
-        if (lower.includes('petchemist.com.au')) return 'petchemist';
-        return 'other';
-      };
-
-      const allRecommendations = [];
-      const routineRecommendations = [];
-      const otherRecommendations = [];
-      let totalOptimizedCost = 0;
-      let totalColesCost = 0;
-      let totalWooliesCost = 0;
-
-      groups.forEach(g => {
-        const sources = itemsByGroup[g.id] || [];
-        if (sources.length === 0) return;
-
-        // Find cheapest valid source
-        let best = sources[0];
-        let colesSource = null;
-        let wooliesSource = null;
-
-        sources.forEach(s => {
-          if (s.currentPrice < best.currentPrice) best = s;
-          const store = getStore(s.url);
-          if (store === 'coles' && (!colesSource || s.currentPrice < colesSource.currentPrice)) colesSource = s;
-          if (store === 'woolworths' && (!wooliesSource || s.currentPrice < wooliesSource.currentPrice)) wooliesSource = s;
-        });
-
-        const bestStore = getStore(best.url);
-        const syncedItemsForGroup = syncedByGroup[g.id] || [];
-        const hasExternalSync = syncedItemsForGroup.length > 0;
-        let syncedQty = 0;
-        if (hasExternalSync) {
-          syncedQty = syncedItemsForGroup.reduce((sum, s) => sum + (s.syncedQty || 1), 0);
-        }
-
-        const qty = Math.max(1, g.routineQuantity || 1, syncedQty);
-        const isRoutine = Boolean(
-          hasExternalSync ||
-          g.isRoutine === 1 || 
-          g.isRoutine === true || 
-          (g.routineFrequency && g.routineFrequency.trim() !== '')
-        );
-        const imageUrl = best.imageUrl || (sources.find(s => s.imageUrl)?.imageUrl) || null;
-
-        const rec = {
-          groupId: g.id,
-          groupName: g.name,
-          quantity: qty,
-          routineFrequency: g.routineFrequency || 'weekly',
-          isRoutine,
-          fromExternalList: hasExternalSync,
-          syncedItems: syncedItemsForGroup,
-          imageUrl,
-          unitPriceDisplay: g.unitPriceDisplay || null,
-          bestStore,
-          bestPrice: best.currentPrice,
-          bestUrl: best.url,
-          bestSourceId: best.id,
-          colesPrice: colesSource ? colesSource.currentPrice : null,
-          colesUrl: colesSource ? colesSource.url : null,
-          wooliesPrice: wooliesSource ? wooliesSource.currentPrice : null,
-          wooliesUrl: wooliesSource ? wooliesSource.url : null,
-          savings: (colesSource && wooliesSource) ? Math.abs(colesSource.currentPrice - wooliesSource.currentPrice) * qty : 0,
-          sourcesCount: sources.length
-        };
-
-        allRecommendations.push(rec);
-
-        if (isRoutine) {
-          routineRecommendations.push(rec);
-          totalOptimizedCost += best.currentPrice * qty;
-          if (colesSource) totalColesCost += colesSource.currentPrice * qty;
-          if (wooliesSource) totalWooliesCost += wooliesSource.currentPrice * qty;
-        } else {
-          otherRecommendations.push(rec);
-        }
-      });
-
-      const selectedItems = showAll ? allRecommendations : routineRecommendations;
-
-      res.json({
-        totalOptimizedCost,
-        totalColesCost: totalColesCost || null,
-        totalWooliesCost: totalWooliesCost || null,
-        potentialSplitSavings: (totalColesCost && totalWooliesCost) ? Math.max(0, Math.min(totalColesCost, totalWooliesCost) - totalOptimizedCost) : 0,
-        items: selectedItems,
-        routineCount: routineRecommendations.length,
-        totalTrackedCount: allRecommendations.length,
-        otherItems: otherRecommendations
-      });
       });
     });
   });
 });
 
-// API: Quick toggle/update routine status for an item/group
-app.post('/api/items/:id/routine', authenticateToken, (req, res) => {
-  const id = Number(req.params.id);
-  const { isRoutine, routineFrequency, routineQuantity } = req.body;
-  const flag = (isRoutine === true || isRoutine === 1 || isRoutine === '1') ? 1 : 0;
-  const freq = routineFrequency || (flag ? 'weekly' : null);
-  const qty = routineQuantity ? Math.max(1, parseInt(routineQuantity, 10)) : 1;
+// =========================================================================
+// FEATURE 2: AUTO-ADD ROUTINE ITEMS WHEN DUE (3 DAYS BEFORE INTERVAL)
+// =========================================================================
 
-  db.run(
-    `UPDATE product_groups SET isRoutine = ?, routineFrequency = ?, routineQuantity = ? WHERE id = ?`,
-    [flag, freq, qty, id],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message });
-      db.run(
-        `UPDATE items SET isRoutine = ?, routineFrequency = ?, routineQuantity = ? WHERE group_id = ?`,
-        [flag, freq, qty, id],
-        (err2) => {
-          if (err2) return res.status(500).json({ error: err2.message });
-          res.json({ success: true, isRoutine: Boolean(flag), routineFrequency: freq, routineQuantity: qty });
+function getFrequencyDays(freq, intervalWeeks) {
+  if (intervalWeeks && !isNaN(intervalWeeks) && intervalWeeks > 0) {
+    return intervalWeeks * 7;
+  }
+  const f = (freq || '').toLowerCase().trim();
+  if (f === 'daily') return 1;
+  if (f === 'weekly' || f === 'every week') return 7;
+  if (f === 'fortnightly' || f === 'every 2 weeks') return 14;
+  if (f === 'monthly' || f === 'every 4 weeks') return 28;
+  return 7;
+}
+
+async function checkAndQueueRoutineItems() {
+  log('[RoutineAutoAdd] Checking routine items due for auto-add (3-day threshold)...');
+  return new Promise((resolve) => {
+    db.all(`SELECT id, name, routineFrequency, intervalWeeks, routineQuantity, lastPurchased, currentPrice FROM product_groups WHERE isRoutine = 1`, [], async (err, groups) => {
+      if (err || !groups) return resolve({ queued: 0, items: [] });
+
+      const now = new Date();
+      const queuedItems = [];
+
+      for (const g of groups) {
+        const intervalDays = getFrequencyDays(g.routineFrequency, g.intervalWeeks);
+        const lastPurchasedDate = g.lastPurchased ? new Date(g.lastPurchased) : new Date(now.getTime() - (intervalDays * 24 * 60 * 60 * 1000));
+        const dueDate = new Date(lastPurchasedDate.getTime() + (intervalDays * 24 * 60 * 60 * 1000));
+        
+        // Due if within 3 days (or overdue)
+        const daysUntilDue = (dueDate - now) / (1000 * 60 * 60 * 24);
+        if (daysUntilDue <= 3) {
+          // Check if already active in synced_list_items
+          const alreadyQueued = await new Promise((resCheck) => {
+            db.get(`SELECT id FROM synced_list_items WHERE group_id = ? AND status = 'active'`, [g.id], (errC, rowC) => {
+              resCheck(Boolean(rowC));
+            });
+          });
+
+          if (!alreadyQueued) {
+            const qty = Math.max(1, g.routineQuantity || 1);
+            const externalId = `routine_${g.id}_${Math.floor(now.getTime() / (intervalDays * 24 * 60 * 60 * 1000))}`;
+            
+            await new Promise((resIns) => {
+              db.run(
+                `INSERT INTO synced_list_items (integration_id, external_id, external_service, raw_text, quantity, group_id, status)
+                 VALUES (NULL, ?, 'routine_auto_add', ?, ?, ?, 'active')`,
+                [externalId, g.name, qty, g.id],
+                () => resIns()
+              );
+            });
+
+            log(`[RoutineAutoAdd] Auto-queued routine item: "${g.name}" (due in ${Math.round(daysUntilDue)} days)`);
+            queuedItems.push({ id: g.id, name: g.name, dueDate, daysUntilDue: Math.round(daysUntilDue) });
+          }
         }
-      );
+      }
+      resolve({ queued: queuedItems.length, items: queuedItems });
+    });
+  });
+}
+
+// Scheduled Daily Cron (6:00 AM) to auto-queue due items
+cron.schedule('0 6 * * *', () => {
+  checkAndQueueRoutineItems().catch(e => log(`[RoutineAutoAdd] Cron error: ${e.message}`, 'WARN'));
+});
+
+// API: Get status of all routine items (due dates & auto-add status)
+app.get('/api/routine/status', authenticateToken, (req, res) => {
+  db.all(`SELECT id, name, routineFrequency, intervalWeeks, routineQuantity, lastPurchased, currentPrice, isRoutine FROM product_groups WHERE isRoutine = 1`, [], (err, groups) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const now = new Date();
+    const result = (groups || []).map(g => {
+      const intervalDays = getFrequencyDays(g.routineFrequency, g.intervalWeeks);
+      const lastPurchasedDate = g.lastPurchased ? new Date(g.lastPurchased) : null;
+      const baseDate = lastPurchasedDate || new Date(now.getTime() - (intervalDays * 24 * 60 * 60 * 1000));
+      const dueDate = new Date(baseDate.getTime() + (intervalDays * 24 * 60 * 60 * 1000));
+      const daysUntilDue = Math.round((dueDate - now) / (1000 * 60 * 60 * 24));
+      return {
+        id: g.id,
+        name: g.name,
+        routineFrequency: g.routineFrequency || 'weekly',
+        quantity: g.routineQuantity || 1,
+        lastPurchased: g.lastPurchased,
+        dueDate: dueDate.toISOString(),
+        daysUntilDue,
+        isDue: daysUntilDue <= 3
+      };
+    });
+    res.json(result);
+  });
+});
+
+// API: Manually trigger due check
+app.post('/api/routine/check-due', authenticateToken, async (req, res) => {
+  try {
+    const outcome = await checkAndQueueRoutineItems();
+    res.json({ success: true, ...outcome });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: Mark routine item as purchased today
+app.post('/api/routine/purchased', authenticateToken, (req, res) => {
+  const { groupId } = req.body;
+  if (!groupId) return res.status(400).json({ error: 'groupId is required' });
+
+  db.run(`UPDATE product_groups SET lastPurchased = CURRENT_TIMESTAMP WHERE id = ?`, [groupId], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    // Also mark active synced item complete if present
+    db.run(`UPDATE synced_list_items SET status = 'completed', updatedAt = CURRENT_TIMESTAMP WHERE group_id = ? AND status = 'active'`, [groupId]);
+    res.json({ success: true, message: 'Item marked as purchased today; next due date reset.' });
+  });
+});
+
+// =========================================================================
+// FEATURE 4: SALE CYCLE PREDICTOR ("WAIT OR BUY NOW?")
+// =========================================================================
+
+app.get('/api/items/:id/sale-prediction', authenticateToken, (req, res) => {
+  const groupId = Number(req.params.id);
+  db.get(`SELECT id, name, currentPrice, targetPrice FROM product_groups WHERE id = ?`, [groupId], (err, group) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    db.all(`
+      SELECT p.price, p.timestamp
+      FROM price_history p
+      JOIN items i ON p.item_id = i.id
+      WHERE i.group_id = ?
+      ORDER BY p.timestamp ASC
+    `, [groupId], (err2, history) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+
+      const prediction = predictSaleCycle(history || [], group.currentPrice, group.targetPrice);
+      res.json({
+        groupId,
+        groupName: group.name,
+        currentPrice: group.currentPrice,
+        targetPrice: group.targetPrice,
+        prediction
+      });
+    });
+  });
+});
+
+// =========================================================================
+// FEATURE 10: ONE-CLICK DATABASE BACKUP & RESTORE & WEEKLY ROTATION
+// =========================================================================
+
+// One-click Backup Download (SQLite binary or JSON)
+app.get('/api/backup/download', authenticateToken, (req, res) => {
+  const format = req.query.format || 'sqlite';
+  const dbFile = path.resolve(__dirname, 'data', 'database.sqlite');
+
+  if (format === 'json') {
+    // Export all tables to JSON
+    const dump = { timestamp: new Date().toISOString(), tables: {} };
+    const tables = ['settings', 'product_groups', 'items', 'price_history', 'list_integrations', 'list_mappings', 'synced_list_items'];
+    let remaining = tables.length;
+
+    tables.forEach(tbl => {
+      db.all(`SELECT * FROM ${tbl}`, [], (err, rows) => {
+        dump.tables[tbl] = rows || [];
+        remaining--;
+        if (remaining === 0) {
+          const filename = `stocksense-backup-${new Date().toISOString().slice(0, 10)}.json`;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+          res.send(JSON.stringify(dump, null, 2));
+        }
+      });
+    });
+  } else {
+    // SQLite file download: checkpoint WAL first to flush everything to main .sqlite file
+    db.run('PRAGMA wal_checkpoint(TRUNCATE);', (chkErr) => {
+      if (chkErr) console.warn('[Backup] WAL checkpoint warning:', chkErr.message);
+      if (!fs.existsSync(dbFile)) {
+        return res.status(404).json({ error: 'Database file not found' });
+      }
+      const filename = `stocksense-backup-${new Date().toISOString().slice(0, 10)}.sqlite`;
+      res.download(dbFile, filename);
+    });
+  }
+});
+
+// Backup Upload & Restore (with automatic safety pre-restore snapshot)
+app.post('/api/backup/upload', authenticateToken, upload.single('backupFile'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No backup file uploaded' });
+  }
+
+  const uploadedPath = req.file.path;
+  const dbFile = path.resolve(__dirname, 'data', 'database.sqlite');
+  const safetyBackupPath = path.resolve(backupsDir, `pre-restore-${Date.now()}.sqlite`);
+
+  try {
+    // Validate SQLite file header: SQLite format 3\0
+    const buffer = Buffer.alloc(16);
+    const fd = fs.openSync(uploadedPath, 'r');
+    fs.readSync(fd, buffer, 0, 16, 0);
+    fs.closeSync(fd);
+
+    const header = buffer.toString('utf8');
+    if (!header.startsWith('SQLite format 3')) {
+      fs.unlinkSync(uploadedPath);
+      return res.status(400).json({ error: 'Invalid backup file. The uploaded file is not a valid SQLite database.' });
     }
-  );
+
+    // Checkpoint and copy current database as safety snapshot
+    await new Promise((resolve) => {
+      db.run('PRAGMA wal_checkpoint(TRUNCATE);', () => {
+        if (fs.existsSync(dbFile)) {
+          fs.copyFileSync(dbFile, safetyBackupPath);
+        }
+        resolve();
+      });
+    });
+
+    // Replace database.sqlite with uploaded file
+    fs.copyFileSync(uploadedPath, dbFile);
+    fs.unlinkSync(uploadedPath);
+
+    // Verify integrity of newly restored DB
+    db.get('PRAGMA integrity_check;', (intErr, intRow) => {
+      if (intErr || intRow?.integrity_check !== 'ok') {
+        log('[Backup] Integrity warning after restore: ' + JSON.stringify(intRow), 'WARN');
+      }
+      log('[Backup] Database successfully restored from uploaded file!');
+      res.json({
+        success: true,
+        message: 'Database restored successfully! Safety snapshot saved before restore.',
+        safetySnapshot: path.basename(safetyBackupPath)
+      });
+    });
+  } catch (e) {
+    if (fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
+    res.status(500).json({ error: 'Failed to restore database: ' + e.message });
+  }
+});
+
+// List local automated backup snapshots
+app.get('/api/backup/snapshots', authenticateToken, (req, res) => {
+  try {
+    const files = fs.readdirSync(backupsDir);
+    const snapshots = files
+      .filter(f => f.endsWith('.sqlite') || f.endsWith('.db'))
+      .map(f => {
+        const fullPath = path.join(backupsDir, f);
+        const stats = fs.statSync(fullPath);
+        return {
+          filename: f,
+          size: stats.size,
+          sizeFormatted: `${(stats.size / (1024 * 1024)).toFixed(2)} MB`,
+          createdAt: stats.birthtime || stats.mtime
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json(snapshots);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Restore from an existing local snapshot
+app.post('/api/backup/snapshots/restore', authenticateToken, (req, res) => {
+  const { filename } = req.body;
+  if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return res.status(400).json({ error: 'Valid snapshot filename required' });
+  }
+
+  const snapshotPath = path.join(backupsDir, filename);
+  if (!fs.existsSync(snapshotPath)) {
+    return res.status(404).json({ error: 'Snapshot not found' });
+  }
+
+  const dbFile = path.resolve(__dirname, 'data', 'database.sqlite');
+  const safetyBackupPath = path.resolve(backupsDir, `pre-restore-${Date.now()}.sqlite`);
+
+  db.run('PRAGMA wal_checkpoint(TRUNCATE);', () => {
+    if (fs.existsSync(dbFile)) {
+      fs.copyFileSync(dbFile, safetyBackupPath);
+    }
+    fs.copyFileSync(snapshotPath, dbFile);
+    res.json({ success: true, message: `Successfully restored database from snapshot ${filename}` });
+  });
+});
+
+// Automated Sunday 3:00 AM weekly backup rotation
+cron.schedule('0 3 * * 0', () => {
+  log('[Backup] Running automated weekly database snapshot...');
+  const dbFile = path.resolve(__dirname, 'data', 'database.sqlite');
+  const nowStr = new Date().toISOString().slice(0, 10);
+  const targetSnapshot = path.resolve(backupsDir, `stocksense-weekly-${nowStr}.sqlite`);
+
+  db.run('PRAGMA wal_checkpoint(TRUNCATE);', () => {
+    if (fs.existsSync(dbFile)) {
+      fs.copyFileSync(dbFile, targetSnapshot);
+      log(`[Backup] Automated weekly snapshot saved: ${path.basename(targetSnapshot)}`);
+
+      // Clean up weekly snapshots older than 28 days (4 weeks)
+      try {
+        const files = fs.readdirSync(backupsDir);
+        const cutoff = Date.now() - (28 * 24 * 60 * 60 * 1000);
+        files.forEach(f => {
+          if (f.startsWith('stocksense-weekly-')) {
+            const p = path.join(backupsDir, f);
+            const st = fs.statSync(p);
+            if (st.mtimeMs < cutoff) {
+              fs.unlinkSync(p);
+              log(`[Backup] Rotated out old snapshot: ${f}`);
+            }
+          }
+        });
+      } catch (cleanErr) {
+        console.warn('[Backup] Snapshot cleanup warning:', cleanErr.message);
+      }
+    }
+  });
+});
+
+// =========================================================================
+// FEATURE 6: AUTOMATED COMPETITOR LINKING INBOX (SINGLE-STORE AUDIT)
+// =========================================================================
+
+// Get items with only 1 tracked retailer store that haven't been dismissed as store-brand only
+app.get('/api/audit/single-source', authenticateToken, (req, res) => {
+  const query = `
+    SELECT g.id, g.name, g.currentPrice, g.tags, g.auditDismissed,
+      COUNT(i.id) as sourceCount,
+      MAX(i.url) as sourceUrl,
+      MAX(i.imageUrl) as imageUrl
+    FROM product_groups g
+    JOIN items i ON i.group_id = g.id
+    WHERE COALESCE(g.auditDismissed, 0) = 0
+    GROUP BY g.id
+    HAVING COUNT(i.id) = 1
+    ORDER BY g.name ASC
+  `;
+
+  db.all(query, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const getStore = (u) => {
+      if (!u) return 'Other';
+      const l = u.toLowerCase();
+      if (l.includes('coles.com.au')) return 'Coles';
+      if (l.includes('woolworths.com.au')) return 'Woolworths';
+      if (l.includes('aldi.com.au')) return 'ALDI';
+      if (l.includes('amazon.')) return 'Amazon';
+      if (l.includes('chemistwarehouse.com.au')) return 'Chemist Warehouse';
+      return 'Other';
+    };
+
+    const enriched = (rows || []).map(r => ({
+      ...r,
+      currentStore: getStore(r.sourceUrl)
+    }));
+    res.json(enriched);
+  });
+});
+
+// Dismiss single-store warning permanently ("Store-brand only / No competitor needed")
+app.post('/api/audit/dismiss', authenticateToken, (req, res) => {
+  const { groupId } = req.body;
+  if (!groupId) return res.status(400).json({ error: 'groupId is required' });
+
+  db.run(`UPDATE product_groups SET auditDismissed = 1 WHERE id = ?`, [groupId], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, message: 'Item dismissed from single-store audit.' });
+  });
+});
+
+// Find competitor suggestions across Coles, Woolies, ALDI, Amazon for single-source item
+app.post('/api/audit/find-competitors', authenticateToken, async (req, res) => {
+  const { groupId, query } = req.body;
+  if (!groupId && !query) return res.status(400).json({ error: 'groupId or query is required' });
+
+  let searchQuery = query;
+  if (!searchQuery && groupId) {
+    const grp = await new Promise((resolve) => {
+      db.get('SELECT name FROM product_groups WHERE id = ?', [groupId], (e, r) => resolve(r));
+    });
+    if (grp) searchQuery = grp.name;
+  }
+
+  if (!searchQuery) return res.status(400).json({ error: 'Could not determine search query' });
+
+  // Clean title for search (remove pack sizes or store brand keywords)
+  const cleanTerm = searchQuery
+    .replace(/\b(coles|woolworths|woolies|aldi|jindurra|power force)\b/gi, '')
+    .replace(/\b\d+(\.\d+)?\s*(g|kg|ml|l|pack|pk)\b/gi, '')
+    .trim() || searchQuery;
+
+  try {
+    const [colesResults, wooliesResults, aldiResults, amazonResults] = await Promise.allSettled([
+      searchSupermarket(cleanTerm, 'coles'),
+      searchSupermarket(cleanTerm, 'woolworths'),
+      searchSupermarket(cleanTerm, 'aldi'),
+      searchAmazon(cleanTerm)
+    ]);
+
+    const candidates = [];
+    if (colesResults.status === 'fulfilled' && Array.isArray(colesResults.value)) {
+      colesResults.value.slice(0, 3).forEach(c => candidates.push({ ...c, store: 'Coles' }));
+    }
+    if (wooliesResults.status === 'fulfilled' && Array.isArray(wooliesResults.value)) {
+      wooliesResults.value.slice(0, 3).forEach(c => candidates.push({ ...c, store: 'Woolworths' }));
+    }
+    if (aldiResults.status === 'fulfilled' && Array.isArray(aldiResults.value)) {
+      aldiResults.value.slice(0, 3).forEach(c => candidates.push({ ...c, store: 'ALDI' }));
+    }
+    if (amazonResults.status === 'fulfilled' && Array.isArray(amazonResults.value)) {
+      amazonResults.value.slice(0, 3).forEach(c => candidates.push({ ...c, store: 'Amazon' }));
+    }
+
+    res.json({ query: cleanTerm, candidates });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to search competitors: ' + e.message });
+  }
+});
+
+// =========================================================================
+// FEATURE 5: MOBILE BARCODE SCANNER (OPEN FOOD FACTS API RESOLVER)
+// =========================================================================
+
+app.get('/api/barcode/:code', authenticateToken, async (req, res) => {
+  const code = (req.params.code || '').trim();
+  if (!code || !/^\d{6,14}$/.test(code)) {
+    return res.status(400).json({ error: 'Valid numerical barcode (6-14 digits) required' });
+  }
+
+  try {
+    const url = `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`;
+    const response = await axios.get(url, {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'StockSense-BarcodeScanner/1.0 (Australian Supermarket Price Tracker)'
+      }
+    });
+
+    if (response.data && response.data.status === 1 && response.data.product) {
+      const p = response.data.product;
+      const brand = p.brands || '';
+      const name = p.product_name || p.product_name_en || '';
+      const quantity = p.quantity || '';
+      
+      let fullName = [brand, name, quantity].filter(Boolean).join(' ');
+      // Clean up duplicate brand repeats
+      if (brand && name.toLowerCase().startsWith(brand.toLowerCase())) {
+        fullName = [name, quantity].filter(Boolean).join(' ');
+      }
+
+      return res.json({
+        found: true,
+        barcode: code,
+        name: fullName || name || 'Unknown Product',
+        brand,
+        quantity,
+        imageUrl: p.image_url || p.image_front_url || null,
+        categories: p.categories || ''
+      });
+    }
+
+    res.json({
+      found: false,
+      barcode: code,
+      message: 'Barcode not found in Open Food Facts database.'
+    });
+  } catch (err) {
+    log(`[Barcode] Error resolving barcode ${code}: ${err.message}`, 'WARN');
+    res.status(500).json({ error: 'Failed to resolve barcode: ' + err.message });
+  }
 });
 
 // API: Send test notification
@@ -1601,8 +2270,17 @@ app.get('/api/items/:id', authenticateToken, (req, res) => {
           };
         });
         row.bestSourceId = bestSourceId;
-        console.log(`[API] GET /api/items/${id} SUCCESS - group ${groupId}, name: "${row.name}", sources: ${row.sources.length}`);
-        res.json(row);
+        
+        // Compute Sale Cycle Prediction for this item
+        db.all(
+          `SELECT p.price, p.timestamp FROM price_history p JOIN items i ON p.item_id = i.id WHERE i.group_id = ? ORDER BY p.timestamp ASC`,
+          [groupId],
+          (histErr, historyRows) => {
+            row.salePrediction = predictSaleCycle(historyRows || [], row.currentPrice, row.targetPrice);
+            console.log(`[API] GET /api/items/${id} SUCCESS - group ${groupId}, name: "${row.name}", sources: ${row.sources.length}`);
+            res.json(row);
+          }
+        );
       });
     });
   };

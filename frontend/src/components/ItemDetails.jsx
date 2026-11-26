@@ -881,6 +881,32 @@ export default function ItemDetails({ itemId, onBack }) {
                           {item.unitPriceDisplay}
                         </div>
                       )}
+                      {/* Feature 4: Sale Cycle Predictor ("Wait or Buy Now?") */}
+                      {item.salePrediction && (
+                        <div style={{
+                          marginTop: 10,
+                          marginBottom: 10,
+                          padding: '10px 14px',
+                          borderRadius: 8,
+                          background: item.salePrediction.status === 'ON_SALE_NOW' ? 'rgba(16, 185, 129, 0.12)' : (item.salePrediction.status === 'WAIT_SALE_SOON' ? 'rgba(234, 179, 8, 0.12)' : 'rgba(59, 130, 246, 0.08)'),
+                          border: `1.5px solid ${item.salePrediction.status === 'ON_SALE_NOW' ? 'var(--success)' : (item.salePrediction.status === 'WAIT_SALE_SOON' ? '#eab308' : 'rgba(59, 130, 246, 0.3)')}`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          fontSize: '0.88rem'
+                        }}>
+                          <span style={{
+                            fontWeight: 800,
+                            color: item.salePrediction.status === 'ON_SALE_NOW' ? 'var(--success)' : (item.salePrediction.status === 'WAIT_SALE_SOON' ? '#fde047' : '#93c5fd'),
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {item.salePrediction.badgeText || (item.salePrediction.status === 'ON_SALE_NOW' ? '🔥 On Sale' : '📊 Price Cadence')}
+                          </span>
+                          <span style={{ color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                            {item.salePrediction.explanation}
+                          </span>
+                        </div>
+                      )}
                       {item.shippingPrice > 0 && (
                         <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 4 }}>
                           (includes ${item.shippingPrice.toFixed(2)} postage)

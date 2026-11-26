@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { RefreshCw, Plus, TrendingDown, Trash2, Layers, Bookmark, CheckCircle2, Repeat, ShoppingBag } from 'lucide-react';
+import { RefreshCw, Plus, TrendingDown, Trash2, Layers, Bookmark, CheckCircle2, Repeat, ShoppingBag, ScanBarcode, Store, Search, ExternalLink, X, AlertTriangle } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { buildAffiliateUrl } from '../utils/affiliate';
+import BarcodeScannerModal from './BarcodeScannerModal';
 
 const getWebsiteName = (url) => {
   if (!url) return 'Alternative';
@@ -191,6 +192,10 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
   const [activePendingId, setActivePendingId] = useState(null);
   const [activeTag, setActiveTag] = useState('All');
   const [giftCardDiscount, setGiftCardDiscount] = useState(0);
+  const [isBarcodeOpen, setIsBarcodeOpen] = useState(false);
+  const [singleSourceAudit, setSingleSourceAudit] = useState([]);
+  const [showAuditInbox, setShowAuditInbox] = useState(false);
+  const [dismissingAuditId, setDismissingAuditId] = useState(null);
   const [affiliateSettings, setAffiliateSettings] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('stocksense_affiliate_settings') || '{}');
@@ -211,6 +216,7 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
   useEffect(() => {
     fetchItems();
     fetchPendingItems();
+    fetchSingleSourceAudit();
     // Load dashboardColumns from server settings on mount
     (async () => {
       try {
@@ -416,6 +422,38 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
       }
     } catch (e) {
       console.error('Failed to dismiss pending item:', e);
+    }
+  };
+
+  const fetchSingleSourceAudit = async () => {
+    try {
+      const res = await axios.get('/api/audit/single-source');
+      setSingleSourceAudit(Array.isArray(res.data) ? res.data : []);
+    } catch (e) {
+      console.warn('Failed to fetch single-source audit:', e);
+    }
+  };
+
+  const handleDismissAudit = async (groupId, e) => {
+    if (e) e.stopPropagation();
+    setDismissingAuditId(groupId);
+    try {
+      await axios.post('/api/audit/dismiss', { groupId });
+      setSingleSourceAudit(prev => prev.filter(a => a.id !== groupId));
+    } catch (err) {
+      console.error('Failed to dismiss audit item:', err);
+    } finally {
+      setDismissingAuditId(null);
+    }
+  };
+
+  const handleBarcodeDetected = (product) => {
+    if (product && product.name) {
+      setNewUrl(product.name);
+      setTimeout(() => {
+        const btn = document.getElementById('btn-add-item-submit');
+        if (btn) btn.click();
+      }, 100);
     }
   };
 
@@ -640,6 +678,15 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
             {matching && !matchResults ? <RefreshCw size={18} className="spinning" style={{ display: 'inline', marginRight: 8, verticalAlign: 'text-bottom' }} /> : <Plus size={18} style={{ display: 'inline', marginRight: 8, verticalAlign: 'text-bottom' }} />}
             {matching && !matchResults ? 'Searching...' : 'Add Item'}
           </button>
+          <button
+            type="button"
+            onClick={() => setIsBarcodeOpen(true)}
+            className="tab-btn"
+            style={{ border: '1px solid var(--accent)', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
+            title="Scan physical product barcode using camera or enter number"
+          >
+            <ScanBarcode size={18} /> Scan Barcode
+          </button>
           <button type="button" onClick={syncPrices} className="btn-primary" style={{ background: 'var(--glass-bg)', border: '1px solid var(--glass-border)', whiteSpace: 'nowrap' }}>
             <RefreshCw size={18} style={{ display: 'inline', marginRight: 8, verticalAlign: 'text-bottom' }} className={syncing ? 'spinning' : ''} />
             {syncing ? 'Syncing...' : 'Sync Prices'}
@@ -667,6 +714,99 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
         </form>
         {taskStatus && <div style={{ color: 'var(--accent)', marginTop: 12, fontSize: '0.9rem', fontStyle: 'italic' }}>↳ {taskStatus}</div>}
         {error && <div style={{ color: 'var(--danger)', marginTop: 12, fontSize: '0.9rem' }}>⚠️ {error}</div>}
+
+        {/* Feature 6: Automated Competitor Linking Inbox (Single-Store Audit) */}
+        {singleSourceAudit.length > 0 && (
+          <div style={{
+            marginTop: 18,
+            padding: '12px 16px',
+            borderRadius: 10,
+            background: 'rgba(59, 130, 246, 0.08)',
+            border: '1.5px solid rgba(59, 130, 246, 0.3)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: '0.92rem', color: '#93c5fd' }}>
+                <Store size={18} color="#38bdf8" />
+                Competitor Opportunities ({singleSourceAudit.length} item{singleSourceAudit.length > 1 ? 's' : ''} tracked at only 1 store)
+              </div>
+              <button
+                type="button"
+                className="tab-btn"
+                onClick={() => setShowAuditInbox(!showAuditInbox)}
+                style={{ fontSize: '0.78rem', padding: '4px 10px', border: '1px solid var(--border)' }}
+              >
+                {showAuditInbox ? 'Hide Opportunities' : 'Review Items'}
+              </button>
+            </div>
+
+            {showAuditInbox && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+                {singleSourceAudit.map(item => (
+                  <div
+                    key={item.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      background: 'rgba(0,0,0,0.3)',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      gap: 12
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                      {item.imageUrl && (
+                        <img src={item.imageUrl} alt="" style={{ width: 34, height: 34, objectFit: 'contain', background: '#fff', borderRadius: 6, padding: 2, flexShrink: 0 }} />
+                      )}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {item.name}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Only at <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{item.currentStore}</span> ({item.currentPrice ? `$${item.currentPrice.toFixed(2)}` : '--'})
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => {
+                          setNewUrl(item.name);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                          setTimeout(() => {
+                            const btn = document.getElementById('btn-add-item-submit');
+                            if (btn) btn.click();
+                          }, 100);
+                        }}
+                        style={{ padding: '5px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                        title="Search Coles, Woolies, ALDI, Amazon for competitors"
+                      >
+                        <Search size={13} /> Find Competitor
+                      </button>
+
+                      <button
+                        type="button"
+                        className="tab-btn"
+                        disabled={dismissingAuditId === item.id}
+                        onClick={(e) => handleDismissAudit(item.id, e)}
+                        style={{ padding: '5px 10px', fontSize: '0.75rem', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+                        title="Mark as store-brand only so it won't repeatedly nag"
+                      >
+                        Dismiss (Store Brand Only)
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Category & Tag Filter Pills */}
         {(() => {
@@ -1780,6 +1920,13 @@ export default function Dashboard({ onItemClick, onNavigateTab }) {
           );
         })}
       </div>
+
+      {/* Feature 5: Mobile Barcode Scanner Modal */}
+      <BarcodeScannerModal
+        isOpen={isBarcodeOpen}
+        onClose={() => setIsBarcodeOpen(false)}
+        onDetected={handleBarcodeDetected}
+      />
     </div>
   );
 }

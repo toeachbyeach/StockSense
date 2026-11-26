@@ -178,6 +178,8 @@ function initDB() {
     db.run(`ALTER TABLE settings ADD COLUMN ntfyServer TEXT DEFAULT 'https://ntfy.sh'`, (err) => { /* Ignore if exists */ });
     db.run(`ALTER TABLE settings ADD COLUMN amazonAssociateTag TEXT`, (err) => { /* Ignore if exists */ });
     db.run(`ALTER TABLE settings ADD COLUMN affiliatePrefix TEXT`, (err) => { /* Ignore if exists */ });
+    db.run(`ALTER TABLE settings ADD COLUMN everydayRewardsExtra BOOLEAN DEFAULT 0`, (err) => { /* Ignore if exists */ });
+    db.run(`ALTER TABLE settings ADD COLUMN flybuysMember BOOLEAN DEFAULT 0`, (err) => { /* Ignore if exists */ });
 
     // Product groups table
     db.run(`
@@ -219,6 +221,8 @@ function initDB() {
     db.run(`ALTER TABLE product_groups ADD COLUMN routineFrequency TEXT`, (err) => { /* Ignore if exists */ });
     db.run(`ALTER TABLE product_groups ADD COLUMN routineQuantity INTEGER DEFAULT 1`, (err) => { /* Ignore if exists */ });
     db.run(`ALTER TABLE product_groups ADD COLUMN isRoutine BOOLEAN DEFAULT 0`, (err) => { /* Ignore if exists */ });
+    db.run(`ALTER TABLE product_groups ADD COLUMN auditDismissed BOOLEAN DEFAULT 0`, (err) => { /* Ignore if exists */ });
+    db.run(`ALTER TABLE product_groups ADD COLUMN lastPurchased DATETIME`, (err) => { /* Ignore if exists */ });
     db.run(`ALTER TABLE items ADD COLUMN couponDiscount REAL DEFAULT 0`, (err) => { /* Ignore if exists */ });
     db.run(`ALTER TABLE items ADD COLUMN targetPrice REAL`, (err) => { /* Ignore if exists */ });
     db.run(`ALTER TABLE items ADD COLUMN routineFrequency TEXT`, (err) => { /* Ignore if exists */ });

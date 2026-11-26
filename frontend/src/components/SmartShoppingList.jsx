@@ -18,15 +18,27 @@ import {
   ListTodo,
   Calendar,
   X,
-  Check
+  Check,
+  ScanBarcode,
+  Car,
+  Store,
+  Tag,
+  Award,
+  CheckCircle,
+  FileText
 } from 'lucide-react';
 import { buildAffiliateUrl, buildAmazonCartLink, isAmazonUrl } from '../utils/affiliate';
+import BarcodeScannerModal from './BarcodeScannerModal';
 
 export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
   const [basketData, setBasketData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [checkedItems, setCheckedItems] = useState({});
   const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'coles', 'woolworths', 'other'
+  const [viewMode, setViewMode] = useState('checklist'); // 'checklist' (in-store checklist) or 'optimizer' (split route breakdown)
+  const [routeStrategy, setRouteStrategy] = useState('any'); // 'any', 'max2', 'single'
+  const [applyEverydayExtra, setApplyEverydayExtra] = useState(false);
+  const [isBarcodeOpen, setIsBarcodeOpen] = useState(false);
   const [showOtherItems, setShowOtherItems] = useState(false);
   const [syncedListItems, setSyncedListItems] = useState([]);
   const [hasIntegration, setHasIntegration] = useState(false);
@@ -73,6 +85,9 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
     try {
       const res = await axios.get('/api/basket');
       setBasketData(res.data);
+      if (res.data?.everydayRewardsExtra !== undefined) {
+        setApplyEverydayExtra(Boolean(res.data.everydayRewardsExtra));
+      }
     } catch (e) {
       console.error('Failed to load shopping list', e);
     } finally {
@@ -235,6 +250,28 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
     });
   };
 
+  const openAldiCart = (items) => {
+    items.forEach(it => {
+      const targetUrl = it.aldiUrl || `https://www.aldi.com.au/product/${encodeURIComponent(it.groupName)}`;
+      window.open(targetUrl, '_blank');
+    });
+  };
+
+  const openAmazonCart = (items) => {
+    items.forEach(it => {
+      const targetUrl = it.amazonUrl || `https://www.amazon.com.au/s?k=${encodeURIComponent(it.groupName)}`;
+      window.open(buildAffiliateUrl(targetUrl, affiliateSettings), '_blank');
+    });
+  };
+
+  const handleBarcodeDetected = (product) => {
+    if (product && product.name) {
+      setNewItemText(product.name);
+      setSyncToast(`Scanned "${product.name}"! Click "Add to List" to queue.`);
+      setTimeout(() => setSyncToast(''), 4500);
+    }
+  };
+
   if (loading) {
     return (
       <div className="glass-panel" style={{ textAlign: 'center', padding: 40 }}>
@@ -247,14 +284,21 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
   const items = basketData?.items || [];
   const colesItems = items.filter(i => i.bestStore === 'coles');
   const wooliesItems = items.filter(i => i.bestStore === 'woolworths');
-  const otherItems = items.filter(i => i.bestStore !== 'coles' && i.bestStore !== 'woolworths');
+  const aldiItems = items.filter(i => i.bestStore === 'aldi');
+  const amazonItems = items.filter(i => i.bestStore === 'amazon');
+  const otherItems = items.filter(i => i.bestStore !== 'coles' && i.bestStore !== 'woolworths' && i.bestStore !== 'aldi' && i.bestStore !== 'amazon');
 
   const filteredItems = items.filter(i => {
     if (activeFilter === 'coles') return i.bestStore === 'coles';
     if (activeFilter === 'woolworths') return i.bestStore === 'woolworths';
-    if (activeFilter === 'other') return i.bestStore !== 'coles' && i.bestStore !== 'woolworths';
+    if (activeFilter === 'aldi') return i.bestStore === 'aldi';
+    if (activeFilter === 'amazon') return i.bestStore === 'amazon';
+    if (activeFilter === 'other') return i.bestStore !== 'coles' && i.bestStore !== 'woolworths' && i.bestStore !== 'aldi' && i.bestStore !== 'amazon';
     return true;
   });
+
+  const checkedCount = items.filter(it => checkedItems[it.groupId]).length;
+  const progressPct = items.length > 0 ? Math.round((checkedCount / items.length) * 100) : 0;
 
   return (
     <div>
@@ -271,7 +315,15 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              className="tab-btn"
+              onClick={() => setIsBarcodeOpen(true)}
+              style={{ border: '1px solid var(--accent)', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 6 }}
+              title="Scan physical product barcode using camera or enter number"
+            >
+              <ScanBarcode size={16} /> Scan Barcode
+            </button>
             <button
               className="tab-btn"
               onClick={handlePrint}
@@ -287,6 +339,49 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
               <RefreshCw size={16} /> Refresh All
             </button>
           </div>
+        </div>
+
+        {/* View Mode Switcher: In-Store Checklist vs Split Optimizer */}
+        <div style={{
+          marginTop: 18,
+          display: 'flex',
+          gap: 10,
+          borderBottom: '1px solid var(--border)',
+          paddingBottom: 12,
+          flexWrap: 'wrap'
+        }}>
+          <button
+            type="button"
+            className={`tab-btn ${viewMode === 'checklist' ? 'active' : ''}`}
+            onClick={() => setViewMode('checklist')}
+            style={{
+              padding: '8px 16px',
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontWeight: 600,
+              fontSize: '0.9rem'
+            }}
+          >
+            <CheckSquare size={17} /> 📋 In-Store Checklist (Aisle Grouped)
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${viewMode === 'optimizer' ? 'active' : ''}`}
+            onClick={() => setViewMode('optimizer')}
+            style={{
+              padding: '8px 16px',
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontWeight: 600,
+              fontSize: '0.9rem'
+            }}
+          >
+            <Sparkles size={17} /> ⚡ Split Basket Optimizer & Carts
+          </button>
         </div>
 
         {/* Sync Toast Feedback */}
@@ -602,45 +697,107 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
         </div>
 
         {/* ========================================================================= */}
-        {/* SECTION 2: ROUTINELY PURCHASED ITEMS & SPLIT BASKET OPTIMIZER (SHOWN NEXT)*/}
+        {/* SECTION 2: SAVINGS BANNER & LOYALTY PROGRAM CALCULATOR                    */}
         {/* ========================================================================= */}
 
-        {/* Potential Savings Banner */}
-        {basketData?.potentialSplitSavings > 0 && (
-          <div style={{
-            marginTop: 20,
-            padding: '14px 18px',
-            borderRadius: 10,
-            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(59, 130, 246, 0.15))',
-            border: '1.5px solid var(--success)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 12
-          }}>
+        {/* Potential Savings & Loyalty Program Banner */}
+        <div style={{
+          marginTop: 20,
+          padding: '16px 20px',
+          borderRadius: 12,
+          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(59, 130, 246, 0.12))',
+          border: '1.5px solid var(--success)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <Sparkles color="var(--success)" size={24} />
               <div>
-                <div style={{ fontWeight: 700, fontSize: '1rem', color: '#fff' }}>
-                  Split Basket Saves You ${basketData.potentialSplitSavings.toFixed(2)}!
+                <div style={{ fontWeight: 700, fontSize: '1.05rem', color: '#fff' }}>
+                  {basketData?.potentialSplitSavings > 0 
+                    ? `Split Basket Saves You $${basketData.potentialSplitSavings.toFixed(2)}!`
+                    : `Multi-Store Price Comparison & Route Optimizer`}
                 </div>
                 <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                  Buying each product at its cheapest store saves money compared to buying everything in one place.
+                  Comparing real-time prices across Coles, Woolworths, ALDI, Chemist Warehouse & Amazon.
                 </div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 16, fontSize: '0.88rem' }}>
-              <div>Optimized: <strong style={{ color: 'var(--success)' }}>${basketData.totalOptimizedCost.toFixed(2)}</strong></div>
-              {basketData.totalColesCost && <div>Coles only: <strong>${basketData.totalColesCost.toFixed(2)}</strong></div>}
-              {basketData.totalWooliesCost && <div>Woolies only: <strong>${basketData.totalWooliesCost.toFixed(2)}</strong></div>}
+            <div style={{ display: 'flex', gap: 16, fontSize: '0.88rem', flexWrap: 'wrap' }}>
+              <div>Optimized Split: <strong style={{ color: 'var(--success)', fontSize: '1rem' }}>${basketData?.totalOptimizedCost?.toFixed(2) || '0.00'}</strong></div>
+              {basketData?.totalColesCost && <div>Coles only: <strong>${basketData.totalColesCost.toFixed(2)}</strong></div>}
+              {basketData?.totalWooliesCost && (
+                <div>
+                  Woolies only: <strong>${basketData.totalWooliesCost.toFixed(2)}</strong>
+                  {applyEverydayExtra && basketData.wooliesDiscountedCost && (
+                    <span style={{ color: 'var(--success)', marginLeft: 6, fontWeight: 700 }}>
+                      (${basketData.wooliesDiscountedCost.toFixed(2)} w/ 10% Extra)
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-        )}
+
+          {/* Loyalty Program Perks Bar (Woolworths Everyday Extra & Flybuys) */}
+          <div style={{
+            padding: '10px 14px',
+            borderRadius: 8,
+            background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            fontSize: '0.83rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={applyEverydayExtra}
+                  onChange={(e) => setApplyEverydayExtra(e.target.checked)}
+                />
+                <span style={{ color: '#34d399', fontWeight: 600 }}>
+                  Woolworths Everyday Extra (10% Monthly Perk)
+                </span>
+              </label>
+
+              {basketData?.totalWooliesCost && applyEverydayExtra && (
+                <span style={{ color: 'var(--success)', fontWeight: 600 }}>
+                  Saves ${Math.min(50, basketData.totalWooliesCost * 0.10).toFixed(2)} on Woolies!
+                </span>
+              )}
+
+              {basketData?.flybuysPoints > 0 && (
+                <span style={{ color: '#f87171', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Award size={13} /> Coles Flybuys: ~{basketData.flybuysPoints} pts (~${basketData.flybuysDollarValue.toFixed(2)})
+                </span>
+              )}
+            </div>
+
+            {applyEverydayExtra && basketData?.wooliesDiscountedCost && basketData?.totalOptimizedCost && (
+              <div style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>
+                {basketData.wooliesDiscountedCost < basketData.totalOptimizedCost ? (
+                  <strong style={{ color: 'var(--success)' }}>
+                    🏆 Woolies with 10% Extra is CHEAPER than splitting (${basketData.wooliesDiscountedCost.toFixed(2)} vs ${basketData.totalOptimizedCost.toFixed(2)})!
+                  </strong>
+                ) : (
+                  <span>
+                    Splitting saves ${(basketData.wooliesDiscountedCost - basketData.totalOptimizedCost).toFixed(2)} vs Woolies 10% perk.
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Quick Instant Buy / Click & Collect Buttons */}
-        <div style={{ marginTop: 20, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ marginTop: 18, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {colesItems.length > 0 && (
             <button
               type="button"
@@ -650,17 +807,17 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
                 color: '#fff',
                 border: 'none',
                 borderRadius: 8,
-                padding: '8px 16px',
+                padding: '8px 14px',
                 fontWeight: 600,
-                fontSize: '0.85rem',
+                fontSize: '0.82rem',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 8
+                gap: 6
               }}
-              title="Open all Coles items in new tabs"
+              title="Open Coles items for Click & Collect"
             >
-              <ExternalLink size={16} /> Open {colesItems.length} Coles Items for Click & Collect
+              <ExternalLink size={14} /> Open {colesItems.length} Coles for Click &amp; Collect
             </button>
           )}
 
@@ -673,361 +830,542 @@ export default function SmartShoppingList({ onNavigateToItem, onNavigateTab }) {
                 color: '#fff',
                 border: 'none',
                 borderRadius: 8,
-                padding: '8px 16px',
+                padding: '8px 14px',
                 fontWeight: 600,
-                fontSize: '0.85rem',
+                fontSize: '0.82rem',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 8
+                gap: 6
               }}
-              title="Open all Woolworths items in new tabs"
+              title="Open Woolworths items for Click & Collect"
             >
-              <ExternalLink size={16} /> Open {wooliesItems.length} Woolworths Items for Click & Collect
+              <ExternalLink size={14} /> Open {wooliesItems.length} Woolies for Click &amp; Collect
+            </button>
+          )}
+
+          {aldiItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => openAldiCart(aldiItems)}
+              style={{
+                background: '#002d72',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                padding: '8px 14px',
+                fontWeight: 600,
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6
+              }}
+              title="Open ALDI items"
+            >
+              <ExternalLink size={14} /> Open {aldiItems.length} ALDI Items
+            </button>
+          )}
+
+          {amazonItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => openAmazonCart(amazonItems)}
+              style={{
+                background: '#f59e0b',
+                color: '#111827',
+                border: 'none',
+                borderRadius: 8,
+                padding: '8px 14px',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6
+              }}
+              title="Open Amazon Cart"
+            >
+              🛒 Open {amazonItems.length} Amazon Items
             </button>
           )}
         </div>
       </div>
 
-      {/* Store Filter Tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <button
-          className={`tab-btn ${activeFilter === 'all' ? 'active' : ''}`}
-          onClick={() => setActiveFilter('all')}
-          style={{ borderRadius: 8, padding: '6px 14px' }}
-        >
-          All Items ({items.length})
-        </button>
-        <button
-          className={`tab-btn ${activeFilter === 'coles' ? 'active' : ''}`}
-          onClick={() => setActiveFilter('coles')}
-          style={{ borderRadius: 8, padding: '6px 14px', borderColor: '#e01a22', color: activeFilter === 'coles' ? '#fff' : '#e01a22' }}
-        >
-          Coles ({colesItems.length})
-        </button>
-        <button
-          className={`tab-btn ${activeFilter === 'woolworths' ? 'active' : ''}`}
-          onClick={() => setActiveFilter('woolworths')}
-          style={{ borderRadius: 8, padding: '6px 14px', borderColor: '#178841', color: activeFilter === 'woolworths' ? '#fff' : '#178841' }}
-        >
-          Woolworths ({wooliesItems.length})
-        </button>
-        {otherItems.length > 0 && (
-          <button
-            className={`tab-btn ${activeFilter === 'other' ? 'active' : ''}`}
-            onClick={() => setActiveFilter('other')}
-            style={{ borderRadius: 8, padding: '6px 14px' }}
-          >
-            Other Stores ({otherItems.length})
-          </button>
-        )}
-      </div>
-
-      {/* Interactive Mobile & In-Store Checklist */}
-      <div className="glass-panel" style={{ padding: '16px 20px' }}>
-        <h3 style={{ margin: '0 0 16px', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <CheckSquare size={18} color="var(--accent)" /> In-Store Checklist (Tap item to tick off)
-        </h3>
-
-        {filteredItems.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '36px 16px' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>🛒</div>
-            <h3 style={{ margin: '0 0 8px', fontSize: '1.2rem', fontWeight: 700 }}>Your Shopping List is Empty</h3>
-            <p style={{ color: 'var(--text-muted)', maxWidth: 520, margin: '0 auto 20px', fontSize: '0.9rem', lineHeight: 1.5 }}>
-              Products marked as <strong>Routinely Bought</strong> on your Price Tracker (like flour, milk, coffee, pet food) automatically feed into this list with real-time supermarket split comparisons.
-            </p>
-            {onNavigateTab && (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => onNavigateTab('tracker')}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, margin: '0 auto 20px', padding: '8px 18px', fontSize: '0.9rem' }}
-              >
-                <ArrowLeft size={16} /> Go to Price Tracker to Add Routine Items
-              </button>
-            )}
-
-            {basketData?.otherItems && basketData.otherItems.length > 0 && (
-              <div style={{ marginTop: 28, textAlign: 'left', borderTop: '1px solid var(--border)', paddingTop: 20 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Plus size={16} color="var(--accent)" /> Or Add Any Tracked Watchlist Item to Your Shopping List:
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {basketData.otherItems.map(other => (
-                    <div
-                      key={other.groupId}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '10px 14px',
-                        borderRadius: 8,
-                        background: 'rgba(255,255,255,0.03)',
-                        border: '1px solid var(--border)',
-                        gap: 12
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                        {other.imageUrl && (
-                          <img src={other.imageUrl} alt="" style={{ width: 36, height: 36, objectFit: 'contain', background: '#fff', borderRadius: 6, padding: 2, flexShrink: 0 }} />
-                        )}
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {other.groupName}
-                          </div>
-                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            Best: ${other.bestPrice?.toFixed(2) || '--'} at {other.bestStore?.toUpperCase()} {other.unitPriceDisplay ? `• ${other.unitPriceDisplay}` : ''}
-                          </div>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={(e) => handleToggleRoutine(other.groupId, false, e)}
-                        style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
-                      >
-                        <Plus size={14} /> Add to Routine List
-                      </button>
-                    </div>
-                  ))}
-                </div>
+      {/* ========================================================================= */}
+      {/* VIEW MODE 1: IN-STORE PHYSICAL CHECKLIST (AISLE / DEPARTMENT GROUPED)     */}
+      {/* ========================================================================= */}
+      {viewMode === 'checklist' && (
+        <div className="glass-panel" style={{ padding: '20px 22px' }}>
+          {/* Checklist Header & Progress Bar */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <CheckSquare size={20} color="var(--accent)" /> In-Store Checklist (Grouped by Supermarket Aisle)
+              </h3>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                Organized in walking order through the store. Tap any item to check off!
               </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {filteredItems.map(item => {
-              const isChecked = !!checkedItems[item.groupId];
-              const storeColor = item.bestStore === 'coles' ? '#e01a22' : (item.bestStore === 'woolworths' ? '#178841' : (item.bestStore === 'aldi' ? '#002d72' : (item.bestStore === 'amazon' ? '#ff9900' : 'var(--accent)')));
-              const storeName = item.bestStore === 'coles' ? 'Coles' : (item.bestStore === 'woolworths' ? 'Woolworths' : (item.bestStore === 'aldi' ? 'ALDI' : (item.bestStore === 'amazon' ? 'Amazon' : item.bestStore.toUpperCase())));
+            </div>
 
-              return (
-                <div
-                  key={item.groupId}
-                  onClick={() => toggleCheck(item.groupId, item)}
-                  style={{
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                {checkedCount} of {items.length} items ticked ({progressPct}%)
+              </span>
+              {checkedCount > 0 && (
+                <button
+                  type="button"
+                  className="tab-btn"
+                  onClick={() => setCheckedItems({})}
+                  style={{ fontSize: '0.75rem', padding: '4px 10px', border: '1px solid var(--border)' }}
+                >
+                  Uncheck All
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Progress Bar */}
+          <div style={{ width: '100%', height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 4, overflow: 'hidden', marginBottom: 20 }}>
+            <div style={{ width: `${progressPct}%`, height: '100%', background: 'var(--success)', transition: 'width 0.25s ease' }} />
+          </div>
+
+          {/* Department Grouped Sections */}
+          {(!basketData?.departments || basketData.departments.length === 0) ? (
+            <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--text-muted)' }}>
+              No routine items on your shopping list yet!
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {basketData.departments.map(dept => (
+                <div key={dept.id} className="checklist-dept-block" style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                  {/* Department Banner Header */}
+                  <div style={{
+                    padding: '10px 16px',
+                    background: 'rgba(255,255,255,0.04)',
+                    borderBottom: '1px solid var(--border)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    padding: '12px 16px',
-                    borderRadius: 10,
-                    background: isChecked ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.05)',
-                    border: isChecked ? '1px solid rgba(255,255,255,0.05)' : '1px solid var(--border)',
-                    cursor: 'pointer',
-                    userSelect: 'none',
-                    opacity: isChecked ? 0.45 : 1,
-                    textDecoration: isChecked ? 'line-through' : 'none',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
-                    {isChecked ? <CheckSquare size={20} color="var(--success)" /> : <Square size={20} color="var(--text-muted)" />}
-                    {item.imageUrl && (
-                      <img src={item.imageUrl} alt="" style={{ width: 44, height: 44, objectFit: 'contain', background: '#fff', borderRadius: 8, padding: 3, flexShrink: 0 }} />
-                    )}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <span>{item.groupName}</span>
-                        {item.quantity > 1 && <span style={{ color: 'var(--accent)', fontWeight: 700 }}>(×{item.quantity})</span>}
-                        {item.fromExternalList && (
-                          <span style={{
-                            background: 'rgba(16, 185, 129, 0.15)',
-                            color: '#34d399',
-                            border: '1px solid rgba(16, 185, 129, 0.35)',
-                            fontSize: '0.7rem',
-                            padding: '1px 6px',
-                            borderRadius: 4,
-                            fontWeight: 600,
-                            display: 'inline-flex',
+                    fontWeight: 700,
+                    fontSize: '0.92rem'
+                  }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: '1.2rem' }}>{dept.icon}</span>
+                      <span>{dept.name}</span>
+                    </span>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                      {dept.items.length} {dept.items.length === 1 ? 'item' : 'items'}
+                    </span>
+                  </div>
+
+                  {/* Items in this aisle */}
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {dept.items.map((item, idx) => {
+                      const isChecked = !!checkedItems[item.groupId];
+                      const storeColor = item.bestStore === 'coles' ? '#e01a22' : (item.bestStore === 'woolworths' ? '#178841' : (item.bestStore === 'aldi' ? '#002d72' : (item.bestStore === 'amazon' ? '#ff9900' : 'var(--accent)')));
+                      const storeName = item.bestStore === 'coles' ? 'Coles' : (item.bestStore === 'woolworths' ? 'Woolworths' : (item.bestStore === 'aldi' ? 'ALDI' : (item.bestStore === 'amazon' ? 'Amazon' : item.bestStore.toUpperCase())));
+
+                      return (
+                        <div
+                          key={item.groupId}
+                          onClick={() => toggleCheck(item.groupId, item)}
+                          style={{
+                            display: 'flex',
                             alignItems: 'center',
-                            gap: 4
-                          }} title="Two-way synced with external to-do list / voice assistant">
-                            <Home size={10} /> Synced List
-                          </span>
-                        )}
-                        {item.routineFrequency && (
-                          <span style={{
-                            background: 'rgba(59, 130, 246, 0.15)',
-                            color: '#93c5fd',
-                            border: '1px solid rgba(59, 130, 246, 0.35)',
-                            fontSize: '0.7rem',
-                            padding: '1px 6px',
-                            borderRadius: 4,
-                            fontWeight: 600
-                          }}>
-                            {item.routineFrequency}
-                          </span>
-                        )}
+                            justifyContent: 'space-between',
+                            padding: '12px 16px',
+                            background: isChecked ? 'rgba(255,255,255,0.015)' : (idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)'),
+                            borderBottom: idx === dept.items.length - 1 ? 'none' : '1px solid rgba(255,255,255,0.04)',
+                            cursor: 'pointer',
+                            userSelect: 'none',
+                            opacity: isChecked ? 0.45 : 1,
+                            textDecoration: isChecked ? 'line-through' : 'none',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
+                            {isChecked ? <CheckSquare size={22} color="var(--success)" /> : <Square size={22} color="var(--text-muted)" />}
+                            {item.imageUrl && (
+                              <img src={item.imageUrl} alt="" style={{ width: 40, height: 40, objectFit: 'contain', background: '#fff', borderRadius: 6, padding: 2, flexShrink: 0 }} />
+                            )}
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: '0.92rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span>{item.groupName}</span>
+                                {item.quantity > 1 && <span style={{ color: 'var(--accent)', fontWeight: 700 }}>(×{item.quantity})</span>}
+                              </div>
+                              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', gap: 8, marginTop: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <span style={{
+                                  background: `${storeColor}22`,
+                                  color: storeColor,
+                                  border: `1px solid ${storeColor}55`,
+                                  padding: '1px 6px',
+                                  borderRadius: 4,
+                                  fontWeight: 700,
+                                  fontSize: '0.7rem'
+                                }}>
+                                  BUY AT {storeName}
+                                </span>
+                                {item.unitPriceDisplay && (
+                                  <span style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '0.72rem' }}>
+                                    {item.unitPriceDisplay}
+                                  </span>
+                                )}
+                                {item.savings > 0 && (
+                                  <span style={{ color: 'var(--success)', fontWeight: 600 }}>
+                                    Saves ${item.savings.toFixed(2)} vs competitor
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign: 'right', marginLeft: 16 }}>
+                            <div style={{ fontWeight: 700, fontSize: '1rem', color: isChecked ? 'var(--text-muted)' : 'var(--text-main)' }}>
+                              ${(item.bestPrice * item.quantity).toFixed(2)}
+                            </div>
+                            {item.quantity > 1 && (
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                (${item.bestPrice.toFixed(2)} ea)
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* VIEW MODE 2: SPLIT BASKET OPTIMIZER & STORE ROUTES                        */}
+      {/* ========================================================================= */}
+      {viewMode === 'optimizer' && (
+        <div>
+          {/* Strategy Tabs */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+            <button
+              className={`tab-btn ${routeStrategy === 'any' ? 'active' : ''}`}
+              onClick={() => setRouteStrategy('any')}
+              style={{ borderRadius: 8, padding: '8px 16px', fontWeight: 600 }}
+            >
+              ⚡ Optimal Split (Cheapest Everywhere)
+            </button>
+
+            {basketData?.twoStoreOptimal && (
+              <button
+                className={`tab-btn ${routeStrategy === 'max2' ? 'active' : ''}`}
+                onClick={() => setRouteStrategy('max2')}
+                style={{ borderRadius: 8, padding: '8px 16px', fontWeight: 600 }}
+              >
+                🚗 Max 2 Stores ({basketData.twoStoreOptimal.pair.map(s => s.toUpperCase()).join(' + ')})
+              </button>
+            )}
+
+            <button
+              className={`tab-btn ${routeStrategy === 'single' ? 'active' : ''}`}
+              onClick={() => setRouteStrategy('single')}
+              style={{ borderRadius: 8, padding: '8px 16px', fontWeight: 600 }}
+            >
+              🏪 Single Store Comparison
+            </button>
+          </div>
+
+          {/* Strategy Details: 2-Store Split */}
+          {routeStrategy === 'max2' && basketData?.twoStoreOptimal && (
+            <div className="glass-panel" style={{ marginBottom: 20, padding: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Car size={20} color="var(--accent)" /> Optimal 2-Store Shopping Trip
+                </h3>
+                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>
+                  Total: ${basketData.twoStoreOptimal.totalCost.toFixed(2)}
+                </div>
+              </div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 16 }}>
+                Minimizes your driving: Buy at <strong>{basketData.twoStoreOptimal.pair[0].toUpperCase()}</strong> and <strong>{basketData.twoStoreOptimal.pair[1].toUpperCase()}</strong> for the best balance of savings and convenience.
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+                <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, background: 'rgba(255,255,255,0.02)' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: 8, textTransform: 'uppercase', color: 'var(--accent)' }}>
+                    {basketData.twoStoreOptimal.store1.store} ({basketData.twoStoreOptimal.store1.items.length} items - ${basketData.twoStoreOptimal.store1.subtotal.toFixed(2)})
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.82rem', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {basketData.twoStoreOptimal.store1.items.map(it => (
+                      <li key={it.groupId}>
+                        {it.groupName} ({it.quantity > 1 ? `×${it.quantity}` : ''}) — <strong>${(it.chosenPrice * it.quantity).toFixed(2)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, background: 'rgba(255,255,255,0.02)' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: 8, textTransform: 'uppercase', color: 'var(--accent)' }}>
+                    {basketData.twoStoreOptimal.store2.store} ({basketData.twoStoreOptimal.store2.items.length} items - ${basketData.twoStoreOptimal.store2.subtotal.toFixed(2)})
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.82rem', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {basketData.twoStoreOptimal.store2.items.map(it => (
+                      <li key={it.groupId}>
+                        {it.groupName} ({it.quantity > 1 ? `×${it.quantity}` : ''}) — <strong>${(it.chosenPrice * it.quantity).toFixed(2)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Strategy Details: Single Store Comparisons */}
+          {routeStrategy === 'single' && (
+            <div className="glass-panel" style={{ marginBottom: 20, padding: 20 }}>
+              <h3 style={{ margin: '0 0 14px', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Store size={20} color="var(--accent)" /> Single Store Basket Totals
+              </h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+                {basketData?.singleStoreComparisons?.map(sc => (
+                  <div key={sc.store} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 16, background: 'rgba(255,255,255,0.02)' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1rem', color: '#fff', marginBottom: 4 }}>
+                      {sc.name}
+                    </div>
+                    <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-main)', marginBottom: 6 }}>
+                      ${sc.cost.toFixed(2)}
+                    </div>
+                    {sc.discountedCost && (
+                      <div style={{ fontSize: '0.82rem', color: 'var(--success)', fontWeight: 600, marginBottom: 4 }}>
+                        w/ 10% Extra: ${sc.discountedCost.toFixed(2)}
                       </div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {item.bestUrl ? (
-                          <a
-                            href={buildAffiliateUrl(item.bestUrl, affiliateSettings)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={e => e.stopPropagation()}
-                            style={{
+                    )}
+                    {sc.missingCount > 0 ? (
+                      <div style={{ fontSize: '0.78rem', color: '#f87171' }}>
+                        ⚠ {sc.missingCount} item{sc.missingCount > 1 ? 's' : ''} not sold at {sc.name}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.78rem', color: 'var(--success)' }}>
+                        ✓ All basket items available
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Store Filter Tabs for List */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <button
+              className={`tab-btn ${activeFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setActiveFilter('all')}
+              style={{ borderRadius: 8, padding: '6px 14px' }}
+            >
+              All Items ({items.length})
+            </button>
+            <button
+              className={`tab-btn ${activeFilter === 'coles' ? 'active' : ''}`}
+              onClick={() => setActiveFilter('coles')}
+              style={{ borderRadius: 8, padding: '6px 14px', borderColor: '#e01a22', color: activeFilter === 'coles' ? '#fff' : '#e01a22' }}
+            >
+              Coles ({colesItems.length})
+            </button>
+            <button
+              className={`tab-btn ${activeFilter === 'woolworths' ? 'active' : ''}`}
+              onClick={() => setActiveFilter('woolworths')}
+              style={{ borderRadius: 8, padding: '6px 14px', borderColor: '#178841', color: activeFilter === 'woolworths' ? '#fff' : '#178841' }}
+            >
+              Woolworths ({wooliesItems.length})
+            </button>
+            {aldiItems.length > 0 && (
+              <button
+                className={`tab-btn ${activeFilter === 'aldi' ? 'active' : ''}`}
+                onClick={() => setActiveFilter('aldi')}
+                style={{ borderRadius: 8, padding: '6px 14px', borderColor: '#002d72', color: activeFilter === 'aldi' ? '#fff' : '#002d72' }}
+              >
+                ALDI ({aldiItems.length})
+              </button>
+            )}
+            {otherItems.length > 0 && (
+              <button
+                className={`tab-btn ${activeFilter === 'other' ? 'active' : ''}`}
+                onClick={() => setActiveFilter('other')}
+                style={{ borderRadius: 8, padding: '6px 14px' }}
+              >
+                Other Stores ({otherItems.length})
+              </button>
+            )}
+          </div>
+
+          {/* Filtered Items List */}
+          <div className="glass-panel" style={{ padding: '16px 20px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {filteredItems.map(item => {
+                const isChecked = !!checkedItems[item.groupId];
+                const storeColor = item.bestStore === 'coles' ? '#e01a22' : (item.bestStore === 'woolworths' ? '#178841' : (item.bestStore === 'aldi' ? '#002d72' : (item.bestStore === 'amazon' ? '#ff9900' : 'var(--accent)')));
+                const storeName = item.bestStore === 'coles' ? 'Coles' : (item.bestStore === 'woolworths' ? 'Woolworths' : (item.bestStore === 'aldi' ? 'ALDI' : (item.bestStore === 'amazon' ? 'Amazon' : item.bestStore.toUpperCase())));
+
+                return (
+                  <div
+                    key={item.groupId}
+                    onClick={() => toggleCheck(item.groupId, item)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '12px 16px',
+                      borderRadius: 10,
+                      background: isChecked ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.05)',
+                      border: isChecked ? '1px solid rgba(255,255,255,0.05)' : '1px solid var(--border)',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      opacity: isChecked ? 0.45 : 1,
+                      textDecoration: isChecked ? 'line-through' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
+                      {isChecked ? <CheckSquare size={20} color="var(--success)" /> : <Square size={20} color="var(--text-muted)" />}
+                      {item.imageUrl && (
+                        <img src={item.imageUrl} alt="" style={{ width: 44, height: 44, objectFit: 'contain', background: '#fff', borderRadius: 8, padding: 3, flexShrink: 0 }} />
+                      )}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span>{item.groupName}</span>
+                          {item.quantity > 1 && <span style={{ color: 'var(--accent)', fontWeight: 700 }}>(×{item.quantity})</span>}
+                          {item.routineFrequency && (
+                            <span style={{
+                              background: 'rgba(59, 130, 246, 0.15)',
+                              color: '#93c5fd',
+                              border: '1px solid rgba(59, 130, 246, 0.35)',
+                              fontSize: '0.7rem',
+                              padding: '1px 6px',
+                              borderRadius: 4,
+                              fontWeight: 600
+                            }}>
+                              {item.routineFrequency}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {item.bestUrl ? (
+                            <a
+                              href={buildAffiliateUrl(item.bestUrl, affiliateSettings)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              style={{
+                                background: `${storeColor}22`,
+                                color: storeColor,
+                                border: `1px solid ${storeColor}55`,
+                                padding: '1px 6px',
+                                borderRadius: 4,
+                                fontWeight: 700,
+                                fontSize: '0.72rem',
+                                textDecoration: 'none',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4
+                              }}
+                            >
+                              BUY AT {storeName} ↗
+                            </a>
+                          ) : (
+                            <span style={{
                               background: `${storeColor}22`,
                               color: storeColor,
                               border: `1px solid ${storeColor}55`,
                               padding: '1px 6px',
                               borderRadius: 4,
                               fontWeight: 700,
-                              fontSize: '0.72rem',
-                              textDecoration: 'none',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 4
-                            }}
-                            title={`Open ${storeName} listing with affiliate link`}
-                          >
-                            BUY AT {storeName} ↗
-                          </a>
-                        ) : (
-                          <span style={{
-                            background: `${storeColor}22`,
-                            color: storeColor,
-                            border: `1px solid ${storeColor}55`,
-                            padding: '1px 6px',
-                            borderRadius: 4,
-                            fontWeight: 700,
-                            fontSize: '0.72rem'
-                          }}>
-                            BUY AT {storeName}
-                          </span>
-                        )}
+                              fontSize: '0.72rem'
+                            }}>
+                              BUY AT {storeName}
+                            </span>
+                          )}
 
-                        {item.unitPriceDisplay && (
-                          <span style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '0.75rem' }}>
-                            {item.unitPriceDisplay}
-                          </span>
-                        )}
+                          {item.unitPriceDisplay && (
+                            <span style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '0.75rem' }}>
+                              {item.unitPriceDisplay}
+                            </span>
+                          )}
 
-                        {item.bestUrl && isAmazonUrl(item.bestUrl) && (
-                          <a
-                            href={buildAmazonCartLink(item.bestUrl, affiliateSettings.amazonAssociateTag)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={e => e.stopPropagation()}
-                            style={{
-                              background: '#f59e0b',
-                              color: '#111827',
-                              padding: '1px 6px',
-                              borderRadius: 4,
-                              fontWeight: 700,
-                              fontSize: '0.72rem',
-                              textDecoration: 'none'
-                            }}
-                            title="Add directly to Amazon Cart"
-                          >
-                            🛒 Cart
-                          </a>
-                        )}
-
-                        {item.savings > 0 && (
-                          <span style={{ color: 'var(--success)', fontWeight: 600 }}>
-                            Saves ${item.savings.toFixed(2)} vs competitor
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ textAlign: 'right', marginLeft: 16, display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '1.05rem', color: isChecked ? 'var(--text-muted)' : 'var(--text-main)' }}>
-                        ${(item.bestPrice * item.quantity).toFixed(2)}
-                      </div>
-                      {item.quantity > 1 && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          (${item.bestPrice.toFixed(2)} ea)
+                          {item.savings > 0 && (
+                            <span style={{ color: 'var(--success)', fontWeight: 600 }}>
+                              Saves ${item.savings.toFixed(2)} vs competitor
+                            </span>
+                          )}
                         </div>
-                      )}
+                      </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => handleToggleRoutine(item.groupId, true, e)}
-                      title="Remove from Routine Shopping List"
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        padding: 4,
-                        opacity: 0.6
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                    <div style={{ textAlign: 'right', marginLeft: 16, display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '1.05rem', color: isChecked ? 'var(--text-muted)' : 'var(--text-main)' }}>
+                          ${(item.bestPrice * item.quantity).toFixed(2)}
+                        </div>
+                        {item.quantity > 1 && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            (${item.bestPrice.toFixed(2)} ea)
+                          </div>
+                        )}
+                      </div>
 
-        {/* Expandable Section to add other tracked items when list is not empty */}
-        {filteredItems.length > 0 && basketData?.otherItems && basketData.otherItems.length > 0 && (
-          <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>
-                {basketData.otherItems.length} other items in your watchlist not marked as routine.
-              </span>
-              <button
-                type="button"
-                className="tab-btn"
-                onClick={() => setShowOtherItems(!showOtherItems)}
-                style={{ fontSize: '0.82rem', padding: '4px 10px', border: '1px solid var(--border)' }}
-              >
-                {showOtherItems ? 'Hide Other Watchlist Items' : '+ Add More Items from Watchlist'}
-              </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleToggleRoutine(item.groupId, true, e)}
+                        title="Remove from Routine Shopping List"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          padding: 4,
+                          opacity: 0.6
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-
-            {showOtherItems && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
-                {basketData.otherItems.map(other => (
-                  <div
-                    key={other.groupId}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '8px 12px',
-                      borderRadius: 8,
-                      background: 'rgba(255,255,255,0.02)',
-                      border: '1px solid rgba(255,255,255,0.06)',
-                      gap: 12
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                      {other.imageUrl && (
-                        <img src={other.imageUrl} alt="" style={{ width: 32, height: 32, objectFit: 'contain', background: '#fff', borderRadius: 4, padding: 2, flexShrink: 0 }} />
-                      )}
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {other.groupName}
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          Best: ${other.bestPrice?.toFixed(2) || '--'} at {other.bestStore?.toUpperCase()}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="tab-btn"
-                      onClick={(e) => handleToggleRoutine(other.groupId, false, e)}
-                      style={{ padding: '4px 10px', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--border)' }}
-                    >
-                      <Plus size={13} /> Add to List
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Barcode Scanner Modal */}
+      <BarcodeScannerModal
+        isOpen={isBarcodeOpen}
+        onClose={() => setIsBarcodeOpen(false)}
+        onDetected={handleBarcodeDetected}
+      />
+
+      {/* Dedicated Print & PDF Layout Stylesheet */}
+      <style>{`
+        @media print {
+          body {
+            background: #ffffff !important;
+            color: #000000 !important;
+          }
+          nav, header, button, .tab-btn, .btn-primary, form, input, select {
+            display: none !important;
+          }
+          .glass-panel {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+          }
+          .checklist-dept-block {
+            border: 1px solid #333 !important;
+            margin-bottom: 16px !important;
+            page-break-inside: avoid !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

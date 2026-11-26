@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Save, Mail, MessageSquare, Bell, BellOff, MapPin, Search, Database, Download, Upload, Truck, Activity, CheckCircle, AlertTriangle, XCircle, RefreshCw, ShieldAlert, CheckCircle2, Bookmark, Copy, Check, ExternalLink } from 'lucide-react';
+import { Save, Mail, MessageSquare, Bell, BellOff, MapPin, Search, Database, Download, Upload, Truck, Activity, CheckCircle, AlertTriangle, XCircle, RefreshCw, ShieldAlert, CheckCircle2, Bookmark, Copy, Check, ExternalLink, Clock } from 'lucide-react';
 import ListIntegrationsSettings from './ListIntegrationsSettings';
 
 export default function Settings() {
@@ -24,8 +24,13 @@ export default function Settings() {
     ntfyTopic: '',
     ntfyServer: 'https://ntfy.sh',
     amazonAssociateTag: '',
-    affiliatePrefix: ''
+    affiliatePrefix: '',
+    everydayRewardsExtra: false,
+    flybuysMember: false
   });
+  const [snapshots, setSnapshots] = useState([]);
+  const [restoringSnapshot, setRestoringSnapshot] = useState(null);
+  const [backupMsg, setBackupMsg] = useState('');
   const [healthData, setHealthData] = useState(null);
   const [probing, setProbing] = useState(false);
   const [probeResultMsg, setProbeResultMsg] = useState('');
@@ -45,7 +50,17 @@ export default function Settings() {
   useEffect(() => {
     fetchSettings();
     fetchScraperHealth();
+    fetchSnapshots();
   }, []);
+
+  const fetchSnapshots = async () => {
+    try {
+      const res = await axios.get('/api/backup/snapshots');
+      setSnapshots(Array.isArray(res.data) ? res.data : []);
+    } catch (e) {
+      console.warn('Failed to load snapshots:', e);
+    }
+  };
 
   const fetchScraperHealth = async () => {
     try {
@@ -216,37 +231,57 @@ export default function Settings() {
     }
   };
 
-  const handleExportBackup = () => {
-    window.location.href = '/api/backup/export?token=' + localStorage.getItem('stocksense_token');
+  const handleDownloadBackup = (format = 'sqlite') => {
+    const token = localStorage.getItem('stocksense_token') || '';
+    window.location.href = `/api/backup/download?format=${format}&token=${encodeURIComponent(token)}`;
   };
 
-  const handleImportBackup = async (e) => {
+  const handleUploadBackup = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
-    if (!window.confirm("Are you sure you want to overwrite your database? All current data will be lost!")) {
+
+    if (!window.confirm("Restore from this backup file? StockSense will automatically create a safety snapshot of your current database first.")) {
       e.target.value = '';
       return;
     }
-    
+
     const formData = new FormData();
-    formData.append('database', file);
-    
-    setMessage('Importing database...');
+    formData.append('backupFile', file);
+
+    setBackupMsg('Uploading and restoring database...');
     try {
-      const res = await axios.post('/api/backup/import', formData, {
+      const res = await axios.post('/api/backup/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      setMessage(res.data.message || 'Import successful. Refreshing...');
+      setBackupMsg(res.data.message || 'Database restored successfully! Refreshing...');
       setTimeout(() => {
         window.location.reload();
-      }, 2000);
+      }, 1500);
     } catch (err) {
       console.error(err);
-      setMessage('Failed to import backup.');
+      setBackupMsg('Failed to restore backup: ' + (err.response?.data?.error || err.message));
+    } finally {
+      e.target.value = '';
     }
-    
-    e.target.value = '';
+  };
+
+  const handleRestoreSnapshot = async (filename) => {
+    if (!window.confirm(`Restore database from snapshot "${filename}"? A safety snapshot will be created before replacing.`)) {
+      return;
+    }
+
+    setRestoringSnapshot(filename);
+    setBackupMsg(`Restoring from snapshot ${filename}...`);
+    try {
+      const res = await axios.post('/api/backup/snapshots/restore', { filename });
+      setBackupMsg(res.data.message || 'Restored snapshot successfully! Refreshing...');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (err) {
+      setBackupMsg('Failed to restore snapshot: ' + (err.response?.data?.error || err.message));
+      setRestoringSnapshot(null);
+    }
   };
 
   return (
@@ -623,6 +658,54 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Supermarket Loyalty Programs (Everyday Rewards Extra & Flybuys) */}
+        <div className="glass-panel">
+          <h3 style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <CheckCircle2 size={20} color="var(--accent)" /> Supermarket Loyalty Programs & Perks
+          </h3>
+          <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 20, lineHeight: 1.5 }}>
+            StockSense can factor your supermarket memberships into shopping list comparisons and basket route calculations.
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                name="everydayRewardsExtra"
+                checked={Boolean(settings.everydayRewardsExtra)}
+                onChange={handleChange}
+                style={{ marginTop: 3 }}
+              />
+              <div>
+                <div style={{ fontWeight: 600, color: '#178841', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  Woolworths Everyday Extra Subscriber
+                </div>
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                  Applies 10% discount to one monthly Woolworths shopping basket (saving up to $50). StockSense will calculate when taking your 10% off beats split shopping!
+                </div>
+              </div>
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                name="flybuysMember"
+                checked={Boolean(settings.flybuysMember)}
+                onChange={handleChange}
+                style={{ marginTop: 3 }}
+              />
+              <div>
+                <div style={{ fontWeight: 600, color: '#e01a22', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  Coles Flybuys Member
+                </div>
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                  Calculates Flybuys points earned on your basket and factors Flybuys member pricing into supermarket comparisons.
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+
         {/* Browser Bookmarklet (Quick Add) */}
         <div className="glass-panel">
           <h3 style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -897,32 +980,105 @@ export default function Settings() {
         {/* Backup & Restore */}
         <div className="glass-panel" style={{ marginTop: 16 }}>
           <h3 style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Database size={20} /> Backup & Restore
+            <Database size={20} color="var(--accent)" /> One-Click Database Backup & Restore
           </h3>
-          <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 24, lineHeight: 1.5 }}>
-            Download a full copy of your StockSense database (including all items, price history, and settings). 
-            You can restore this backup later if you move to a new server or want to roll back changes.
-            <br/><br/>
-            <b>Note:</b> A rolling backup is also automatically created on your server every time you add a new item or link.
+          <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 20, lineHeight: 1.5 }}>
+            Download complete backups of your StockSense database (items, price history, routine intervals, settings) or restore an existing backup.
+            Automated snapshots are also generated weekly every Sunday morning at 3:00 AM.
           </div>
 
-          <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-            <button type="button" className="tab-btn" onClick={handleExportBackup} style={{ border: '1px solid var(--border)', flex: 1, display: 'flex', justifyContent: 'center', gap: 8 }}>
-              <Download size={18} /> Export Database
+          {backupMsg && (
+            <div style={{
+              padding: '10px 14px',
+              borderRadius: 8,
+              fontSize: '0.85rem',
+              marginBottom: 16,
+              background: backupMsg.includes('Failed') ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+              border: `1px solid ${backupMsg.includes('Failed') ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)'}`,
+              color: backupMsg.includes('Failed') ? '#fca5a5' : '#6ee7b7'
+            }}>
+              {backupMsg}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 20 }}>
+            <button
+              type="button"
+              className="tab-btn"
+              onClick={() => handleDownloadBackup('sqlite')}
+              style={{ border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 16px' }}
+            >
+              <Download size={18} color="var(--accent)" /> Download SQLite DB (.sqlite)
             </button>
-            <div style={{ position: 'relative', flex: 1 }}>
+
+            <button
+              type="button"
+              className="tab-btn"
+              onClick={() => handleDownloadBackup('json')}
+              style={{ border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 16px' }}
+            >
+              <Download size={18} color="#10b981" /> Export All Tables (.json)
+            </button>
+
+            <div style={{ position: 'relative' }}>
               <input 
                 type="file" 
                 accept=".sqlite,.db" 
-                onChange={handleImportBackup} 
+                onChange={handleUploadBackup} 
                 style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', cursor: 'pointer', zIndex: 2 }}
-                title="Import Backup"
+                title="Upload SQLite Database to Restore"
               />
-              <button type="button" className="btn-primary" style={{ width: '100%', display: 'flex', justifyContent: 'center', gap: 8, pointerEvents: 'none' }}>
-                <Upload size={18} /> Restore Database
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 16px', pointerEvents: 'none' }}
+              >
+                <Upload size={18} /> Restore from File (.sqlite)
               </button>
             </div>
           </div>
+
+          {/* Automated Weekly Snapshots List */}
+          {snapshots.length > 0 && (
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 12 }}>
+              <div style={{ fontSize: '0.88rem', fontWeight: 600, marginBottom: 10, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Clock size={16} color="var(--accent)" /> Server Snapshots ({snapshots.length} available)
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {snapshots.slice(0, 5).map(snap => (
+                  <div
+                    key={snap.filename}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      fontSize: '0.85rem'
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600, fontFamily: 'monospace', color: '#fff' }}>{snap.filename}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {new Date(snap.createdAt).toLocaleString()} • {snap.sizeFormatted}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="tab-btn"
+                      disabled={restoringSnapshot === snap.filename}
+                      onClick={() => handleRestoreSnapshot(snap.filename)}
+                      style={{ padding: '4px 10px', fontSize: '0.78rem', border: '1px solid var(--border)' }}
+                    >
+                      {restoringSnapshot === snap.filename ? 'Restoring...' : 'Restore This Snapshot'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         {/* Layout */}
         <div className="glass-panel" style={{ marginTop: 16 }}>
