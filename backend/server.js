@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const cron = require('node-cron');
 const db = require('./db');
@@ -25,8 +26,6 @@ if (!fs.existsSync(backupsDir)) {
   fs.mkdirSync(backupsDir, { recursive: true });
 }
 const upload = multer({ dest: 'data/uploads/' });
-
-const path = require('path');
 
 const app = express();
 app.use(cors());
